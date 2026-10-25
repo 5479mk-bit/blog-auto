@@ -76,8 +76,14 @@ def restore() -> None:
             prof.mkdir(exist_ok=True)
             ch = os.environ.get("CHROME_CHANNEL", "")
             ctx = p.chromium.launch_persistent_context(str(prof), headless=True, **({"channel": ch} if ch else {}))
-            ctx.add_cookies([{k: v for k, v in c.items() if k in ("name", "value", "domain", "path", "expires", "httpOnly", "secure", "sameSite")}
-                             for c in cookies])
+            import time as _t
+            fixed = []
+            for c in cookies:
+                c = {k: v for k, v in c.items() if k in ("name", "value", "domain", "path", "expires", "httpOnly", "secure", "sameSite")}
+                if not c.get("expires") or c["expires"] <= 0:  # 세션 쿠키(NID_SES 등)는 창을 닫으면 사라진다 → 30일짜리로 저장
+                    c["expires"] = int(_t.time()) + 30 * 86400
+                fixed.append(c)
+            ctx.add_cookies(fixed)
             ctx.close()
             print(f"[cookies] {kind}: {len(cookies)}개 복원 → {prof.name}", flush=True)
 
