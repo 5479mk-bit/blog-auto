@@ -39,6 +39,32 @@ def export(kind: str) -> str:
     return base64.b64encode(gzip.compress(json.dumps(cookies).encode())).decode()
 
 
+def login_export(kind: str = "naver") -> str:
+    """브라우저를 띄워 사람이 로그인 → 로그인되는 즉시(창을 닫기 전에) 세션 쿠키까지 포함해 추출.
+    '로그인 상태 유지'를 체크하면 쿠키 수명이 길어진다."""
+    import time
+    with sync_playwright() as p:
+        ctx = p.chromium.launch_persistent_context(str(PROFILES[kind]), headless=False,
+                                                   **({"channel": "chrome"} if os.name == "nt" else {}))
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        page.goto("https://nid.naver.com/nidlogin.login?url=https%3A%2F%2Fblog.naver.com%2F")
+        print("[cookies] 브라우저에서 네이버 로그인하세요('로그인 상태 유지' 체크 권장). 최대 10분 대기", file=sys.stderr, flush=True)
+        deadline = time.time() + 600
+        while time.time() < deadline:
+            names = {c["name"] for c in ctx.cookies() if "naver.com" in c.get("domain", "")}
+            if {"NID_AUT", "NID_SES"} <= names and "nidlogin" not in page.url:
+                break
+            time.sleep(2)
+        else:
+            ctx.close()
+            raise SystemExit("로그인 감지 실패")
+        time.sleep(3)
+        cookies = [c for c in ctx.cookies() if any(d in c.get("domain", "") for d in DOMAINS[kind])]
+        ctx.close()
+    print(f"[cookies] {kind}: 로그인 확인, 쿠키 {len(cookies)}개", file=sys.stderr)
+    return base64.b64encode(gzip.compress(json.dumps(cookies).encode())).decode()
+
+
 def restore() -> None:
     with sync_playwright() as p:
         for kind, prof in PROFILES.items():
@@ -59,6 +85,8 @@ def restore() -> None:
 if __name__ == "__main__":
     if len(sys.argv) >= 3 and sys.argv[1] == "export":
         sys.stdout.write(export(sys.argv[2]))
+    elif len(sys.argv) >= 2 and sys.argv[1] == "login-export":
+        sys.stdout.write(login_export(sys.argv[2] if len(sys.argv) > 2 else "naver"))
     elif len(sys.argv) >= 2 and sys.argv[1] == "restore":
         restore()
     else:
