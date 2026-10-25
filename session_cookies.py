@@ -42,7 +42,7 @@ def export(kind: str) -> str:
 def restore() -> None:
     with sync_playwright() as p:
         for kind, prof in PROFILES.items():
-            raw = os.environ.get(ENV[kind], "").strip()
+            raw = "".join(ch for ch in os.environ.get(ENV[kind], "") if ch.isascii() and not ch.isspace())  # PowerShell이 붙이는 BOM 등 제거
             if not raw:
                 print(f"[cookies] {ENV[kind]} 없음 — {kind} 건너뜀", flush=True)
                 continue
