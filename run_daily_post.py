@@ -1237,23 +1237,17 @@ def _question_turn() -> bool:
 def _event_title_rule(research: dict) -> str:
     kw = research.get("golden_keyword") or research.get("target_keyword") or ""
     if research.get("title_style") == "question":
-        return (f"★ 이번 제목은 **질문형**(사용자 세부 규칙 2026-10-21). ① '{kw}'(검색 키워드)를 반드시 제목 맨 앞에. "
-                "② 넋두리·누구나 아는 당연한 질문('왜 어려울까?', '언제 나올까?', '어디일까?'만 단독) 절대 금지. "
-                "③ 질문은 아래 3패턴 중 하나로 독자의 호기심을 자극: "
-                "[손실 방지] '~하면 무조건 손해보는 이유는?', '~할 때 절대 하면 안 되는 실수?' / "
-                "[비교·추천] '~보다 ~가 더 좋은 이유는?', '가장 붐비는 시간대 피하는 법?' / "
-                "[숨은 꿀팁] '경쟁률 가장 낮은 구역은 어디일까?', '무료 주차장 위치는?'. "
-                "④ 낚시 금지 — 질문에 대한 구체적인 답이 [JSON 데이터]에 있어야 하고, 본문에 그 질문을 그대로 `##` 소제목으로 두고 바로 아래에서 구체적으로 답한다(데이터에 근거 없으면 다른 패턴 선택). "
-                "⑤ 질문 뒤 괄호에 세부 키워드 2~3개. "
-                f"예: '{kw} 2차 예매, 새로고침만 누르면 망하는 이유는? (성공 팁·좌석 시야)', "
-                "'○○축제 라인업, 토요일보다 일요일을 예매해야 하는 이유는? (요일별 시간표)', "
-                "'○○축제, 차 끌고 가면 무조건 후회하는 이유는? (임시 주차장·일정 총정리)'.")
+        return (f"★ 이번 제목은 **질문/궁금증형**(2026-10-26 검색 최적화). ① '{kw}'(검색 키워드)를 반드시 제목 맨 앞에 연속된 단어로 둘 것. "
+                "② 넋두리나 추상적 질문 금지. 독자가 검색창에 칠 실질적 궁금증(주차 피하는 법, 가장 붐비는 시간 피하는 법, 예매 성공 팁 등)과 직결되게 작성. "
+                "③ '총정리', '완벽가이드' 같은 스팸 감점 단어는 제외하고 '핵심 안내', '방문 꿀팁', '상세 가이드'로 결합. "
+                f"예: '{kw} 주차 명당과 셔틀버스 팁! 차 끌고 가기 전 필독 방문 가이드', "
+                f"'{kw} 라인업·시간표 언제 가야 가장 좋을까? (일정·주차 상세 안내)'.")
     if research.get("topic_category") == "KPOP":
-        return (f"'{kw}'를 맨 앞에(연도 포함 가능) + 팬들이 지금 찾는 것 3~4개(라인업·티켓팅·예매·투표·시야·좌석·굿즈·시간·중계) + '총정리/정리'. "
-                f"예: '2026 MAMA AWARDS 라인업 티켓팅 시야 총정리', '세븐틴 콘서트 티켓팅 일정 좌석 시야 굿즈 정리'. 앞에 '라인업 떴다!!!' 같은 짧은 감탄 훅을 붙여도 좋다.")
+        return (f"'{kw}'를 맨 앞에(연도 포함 가능) + 팬들이 지금 찾는 것 3~4개(라인업·티켓팅·예매·좌석·시야·일정) + '상세 안내'. "
+                f"예: '2026 {kw} 라인업 티켓팅 예매 좌석 시야 상세 안내'. 앞에 '라인업 공개!' 같은 짧은 훅을 붙여도 좋다.")
     region = research.get("region") or ""
-    return (f"'2026 {kw} 일정 가수 라인업 주차 총정리 (ft. {region} 가볼만한곳)' 공식. 세부 단어는 데이터에 있는 것(셔틀·먹거리·불꽃놀이·입장료·시간표)으로 바꿔도 된다. "
-            "앞에 '○○○ 뜬다!' 처럼 대표 초대가수 이름 훅을 붙이면 더 좋다(라인업이 확인된 경우만).")
+    return (f"'2026 {kw} 일정·가수 라인업·주차 정보 핵심 안내 (ft. {region} 가볼만한곳)' 공식. 세부 단어는 데이터에 있는 것(셔틀·먹거리·입장료·시간표)으로 바꿔도 된다. "
+            "(스팸 필터 회피를 위해 '총정리' 대신 '핵심 안내', '방문 가이드' 권장).")
 
 
 def _build_system_prompt() -> str:
@@ -1606,12 +1600,12 @@ _BANNED_BODY = re.compile(
     r"확인된\s?정보만|확인된\s?프로필|결론적으로|요약하자면|이\s?글에서는"
 )
 _BANNED_TITLE = re.compile(r"완벽\s?가이드|대방출|꿀팁|한눈에\s?보기|알아봅시다|[★▶♥]|\[속보\]")
-_MAP_LINE_RE = re.compile(r"^\s*\[네이버 지도 연동용 상호명:.*\]\s*$")
+_MAP_LINE_RE = re.compile(r"^\s*\[(네이버\s*지도|지도\s*연동용|사진\s*출처).*\]\s*$", re.IGNORECASE)
 _IMG_PH_RE = re.compile(r"^\s*\[이미지\s*:\s*(.*?)\]\s*$")
 
 
 def _scan_banned(text: str) -> list[str]:
-    clean = "\n".join(l for l in text.split("\n") if not _MAP_LINE_RE.match(l))
+    clean = "\n".join(l for l in text.split("\n") if not _MAP_LINE_RE.search(l))
     return sorted({m.group(0) for m in _BANNED_BODY.finditer(clean)})
 
 
@@ -2301,39 +2295,86 @@ def _valid_table(slide: dict) -> bool:
 # ── ⑧ 태그 ───────────────────────────────────────────────
 def make_tags(research: dict) -> list[str]:
     kw = str(research.get("target_keyword") or "")
-    # 지역 태그: 리서치의 region은 "서울시 성동구 성수동"처럼 길 수 있어서 키워드에서 "OO동/OO역/OO로" 토큰을 우선 쓴다.
-    region = next((w for w in kw.split() if re.search(r"(동|역|로|리|구)$", w) and len(w) <= 6), "")
+    # 지역 태그: 리서치의 region은 "서울시 성동구 성수동"처럼 길 수 있어서 키워드에서 "OO동/OO역/OO로/OO구/OO군/OO시" 토큰을 우선 쓴다.
+    region = next((w for w in kw.split() if re.search(r"(동|역|로|리|구|군|시)$", w) and len(w) <= 6), "")
     if not region:
         region = (str(research.get("region") or "").split() or [""])[-1]
     tags: list[str] = []
 
+    STOPWORDS = {"차", "가면", "안", "되는", "이유", "하는", "있는", "위한", "후기", "정보", "정리", "꿀팁", "추천", "곳", "것", "사과", "축제", "행사", "스토어", "팝업", "코스"}
+
     def add(t: str):
         t = re.sub(r"[^0-9A-Za-z가-힣]", "", t)
-        if 2 <= len(t) <= 20 and t not in tags:
+        if 2 <= len(t) <= 20 and t not in tags and t not in STOPWORDS:
             tags.append(t)
-    if research.get("hot") and research.get("golden_keyword"):
-        for w in ("웨이팅", "사전예약", "예약방법", "주차장", "굿즈", "오픈런", "운영시간", "후기"):
-            add(research["golden_keyword"] + w)
+
+    # 1. 메인 타겟 키워드 및 골든 키워드
     if research.get("golden_keyword"):
         add(research["golden_keyword"])
-        for r in (research.get("seo_keywords") or [])[:8]:
-            add(r["kw"])
     add(kw)
-    for w in kw.split():
-        add(w)
+
+    # 2. 메인 장소명
     for p in research.get("main_places", []):
         add(str(p.get("place_name", "")))
-    base = {"POPUP_ROUNDUP": ["팝업스토어", "팝업스토어추천", "팝업", "이번주팝업", "서울팝업스토어", "팝업스토어일정"],
-            "HOTPLACE": ["신상핫플", "신규오픈", "핫플레이스", "서울핫플", "신상카페", "가볼만한곳"],
-            "DATE_COURSE": ["데이트코스", "데이트코스추천", "주말데이트", "서울데이트", "가볼만한곳", "데이트장소"]}
-    cat = research.get("topic_category", "POPUP_ROUNDUP")
-    for b in base.get(cat, base["POPUP_ROUNDUP"]):
+
+    cat = research.get("topic_category", "DATE_COURSE")
+    gkw = research.get("golden_keyword") or kw
+
+    # 3. 카테고리별 세부 롱테일 태그
+    if cat == "POPUP_ROUNDUP":
+        for w in ("웨이팅", "사전예약", "예약방법", "오픈런", "굿즈"):
+            if gkw:
+                add(gkw + w)
+    elif cat == "FESTIVAL":
+        for w in ("일정", "주차", "라인업", "시간표"):
+            if gkw:
+                add(gkw + w)
+    elif cat == "KPOP":
+        for w in ("라인업", "티켓팅", "일정", "예매"):
+            if gkw:
+                add(gkw + w)
+    elif cat in ("HOTPLACE", "DATE_COURSE"):
+        for w in ("주차", "웨이팅", "영업시간"):
+            if gkw:
+                add(gkw + w)
+
+    # 4. 카테고리별 테마 태그
+    base = {
+        "POPUP_ROUNDUP": ["팝업스토어", "팝업스토어추천", "팝업", "이번주팝업", "팝업스토어일정"],
+        "HOTPLACE": ["핫플레이스", "핫플추천", "가볼만한곳", "신상핫플", "주말나들이"],
+        "DATE_COURSE": ["데이트코스", "데이트코스추천", "주말데이트", "가볼만한곳", "나들이코스"],
+        "FESTIVAL": ["축제", "페스티벌", "지역축제", "가을축제", "축제일정"],
+        "KPOP": ["콘서트", "공연일정", "티켓팅", "라인업"],
+    }
+    for b in base.get(cat, base["DATE_COURSE"]):
         add(b)
-        if region:
-            add(region + b)
-    for extra in ("주말나들이", "수도권가볼만한곳", "핫플추천", "나들이코스", "서울가볼만한곳"):
-        add(extra)
-    return tags[:20]
+
+    # 5. 지역 기반 태그 (수도권 vs 비수도권 엄격 분리)
+    full_region = str(research.get("region") or "")
+    is_metropolitan = any(s in full_region or s in kw for s in ("서울", "경기", "인천", "수도권"))
+
+    if region:
+        if is_metropolitan:
+            add(region + "가볼만한곳")
+            add(region + "데이트")
+            if cat == "POPUP_ROUNDUP":
+                add(region + "팝업스토어")
+            elif cat == "HOTPLACE":
+                add(region + "핫플")
+        else:
+            add(region + "가볼만한곳")
+            add(region + "여행")
+            if cat == "FESTIVAL":
+                add(region + "축제")
+
+    if is_metropolitan:
+        for extra in ("주말나들이", "수도권가볼만한곳", "서울가볼만한곳"):
+            add(extra)
+    else:
+        for extra in ("주말나들이", "국내여행", "가을여행지추천"):
+            add(extra)
+
+    return tags[:12]
 
 
 # ── ⑨ 티스토리 Markdown → HTML ─────────────────────────────
@@ -2732,7 +2773,8 @@ def build_post(topic: str) -> dict:
 
     naver_body, naver_imgs = place_images(post["naver_content_body"], photos, names + nearby_names)
     tistory_body, tistory_imgs = place_images(post["tistory_content_body"], photos, names + nearby_names)
-    tistory_body = "\n".join(l for l in tistory_body.split("\n") if not _MAP_LINE_RE.match(l))
+    naver_body = "\n".join(l for l in naver_body.split("\n") if not _MAP_LINE_RE.search(l))
+    tistory_body = "\n".join(l for l in tistory_body.split("\n") if not _MAP_LINE_RE.search(l))
     tistory_imgs = tistory_imgs + _spread_leftover(tistory_body, photos, {i["path"] for i in tistory_imgs})
     for im in tistory_imgs:  # 티스토리 본문에선 ==강조== 가 <span>으로 바뀌므로 이미지 위치 anchor에서 기호를 뗀다
         im["after_text"] = (im.get("after_text") or "").replace("==", "")
@@ -2759,6 +2801,9 @@ def build_post(topic: str) -> dict:
         tistory_imgs = tistory_imgs + anchor_cards(tistory_body, cards, strip_marks=True)
     for s in slides:
         s.pop("_type", None)
+    # 본문 내 시스템 프롬프트 잔여물 최종 제거
+    naver_body = "\n".join(l for l in naver_body.split("\n") if not _MAP_LINE_RE.search(l)).strip()
+    tistory_body = "\n".join(l for l in tistory_body.split("\n") if not _MAP_LINE_RE.search(l)).strip()
     post.update({
         "naver_body_final": naver_body, "tistory_body_final": tistory_body,
         **({"naver_category": NAVER_CATEGORY_EVENT, "tistory_category": TISTORY_CATEGORY_EVENT} if research.get("topic_category") in EVENT_CATS else {}),

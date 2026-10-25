@@ -655,6 +655,11 @@ def save_naver_draft(
 
             images = images or []
             blocks = blocks or []
+            # 본문 내 시스템/프롬프트 잔여물 제거 (지도 연동용 상호명 등)
+            body_text = "\n".join(
+                l for l in body_text.split("\n")
+                if not re.search(r"^\s*\[(네이버\s*지도|지도\s*연동용|사진\s*출처).*\]\s*$", l, re.IGNORECASE)
+            ).strip()
             body_lines = body_text.split("\n")
 
             # after_text가 본문 줄과 정확히 일치하는 것만 "본문 중간 삽입" 대상으로 인정.
