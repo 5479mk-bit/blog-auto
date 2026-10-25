@@ -1,0 +1,122 @@
+name: blog-publish
+
+# 하루 4편(한국시간 10·14·17·21시) + 지연/실패 보충. GitHub 예약 실행은 몇 분~수십 분 늦을 수 있다.
+on:
+  schedule:
+    - cron: "0 1 * * *"    # 10:00 KST
+    - cron: "0 5 * * *"    # 14:00 KST
+    - cron: "0 8 * * *"    # 17:00 KST
+    - cron: "0 12 * * *"   # 21:00 KST
+    - cron: "40 3,7,10,13 * * *"  # 보충(catchup_guard: 밀린 슬롯만 채움)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "드라이런(발행 안 함)"
+        type: boolean
+        default: true
+      mode:
+        description: "slot=바로 1편 / guard=밀린 것만 보충"
+        type: choice
+        options: [slot, guard]
+        default: slot
+
+concurrency:
+  group: blog-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    env:
+      TZ: Asia/Seoul
+      PYTHONIOENCODING: utf-8
+      NAVER_ID: ${{ vars.NAVER_ID || 'livinglegeno' }}
+      CHROME_CHANNEL: chrome
+      PIPELINE_BACKEND: hybrid
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Claude Code CLI (구독 토큰 사용)
+        run: npm install -g @anthropic-ai/claude-code && claude --version
+
+      - name: 시스템 패키지(가상 화면·한글 폰트)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb fonts-noto-cjk > /dev/null
+
+      - name: Python 환경
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -q -r requirements.txt
+          .venv/bin/python -m playwright install --with-deps chromium chrome
+          python -m venv keyt/.venv
+          keyt/.venv/bin/pip install -q -r keyt/requirements.txt
+
+      - name: 키 파일 생성(Secrets → 파일, 커밋 안 됨)
+        env:
+          API_KEYS_ENV: ${{ secrets.API_KEYS_ENV }}
+          KEYT_ENV: ${{ secrets.KEYT_ENV }}
+        run: |
+          printf '%s\n' "$API_KEYS_ENV" > api_keys.env
+          printf '%s\n' "$KEYT_ENV" > keyt/.env
+          mkdir -p logs
+
+      - name: 로그인 쿠키 복원
+        env:
+          NAVER_COOKIES: ${{ secrets.NAVER_COOKIES }}
+          TISTORY_COOKIES: ${{ secrets.TISTORY_COOKIES }}
+        run: .venv/bin/python session_cookies.py restore
+
+      - name: 티스토리 데몬 시작
+        run: |
+          nohup xvfb-run -a .venv/bin/python -u tistory_daemon.py > logs/tistory_daemon.log 2>&1 &
+          for i in $(seq 1 36); do
+            if curl -fs http://127.0.0.1:8765/health; then echo " ← 티스토리 로그인 OK"; break; fi
+            sleep 5
+          done
+          curl -fs http://127.0.0.1:8765/health || { echo "::warning::티스토리 로그인 실패 — 쿠키 갱신 필요(이번엔 네이버만 발행)"; tail -20 logs/tistory_daemon.log; }
+
+      - name: 발행 실행
+        env:
+          DRY: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+          MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || (github.event.schedule == '40 3,7,10,13 * * *' && 'guard' || 'slot') }}
+        run: |
+          if [ "$DRY" = "true" ]; then export DRY_RUN=1 SKIP_VISUAL_GATE=1; echo "드라이런"; fi
+          if [ "$MODE" = "guard" ]; then
+            xvfb-run -a .venv/bin/python catchup_guard.py || true
+          else
+            xvfb-run -a .venv/bin/python run_daily_post.py || echo "::warning::run_daily_post 종료 코드 $?"
+          fi
+          grep -a "채택(\|발행 완료\|\[gate\]\|사전조건\|state\]" logs/run_daily_post.log | tail -15 || true
+
+      - name: 상태 저장(발행 이력·중복 방지)
+        if: always()
+        run: |
+          git config user.name "blog-bot"
+          git config user.email "blog-bot@users.noreply.github.com"
+          git add topics.md used_state.json run_state.json spike_state.json outputs/cache/kw_volumes.json 2>/dev/null || true
+          if ! git diff --cached --quiet; then
+            git commit -q -m "state: $(date '+%Y-%m-%d %H:%M') 실행 결과"
+            for i in 1 2 3; do git pull -q --rebase && git push -q && break; sleep 5; done
+          fi
+
+      - name: 로그 보관
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ github.run_id }}
+          path: |
+            logs/
+            outputs/images/
+          retention-days: 7

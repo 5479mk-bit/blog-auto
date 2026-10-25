@@ -1,0 +1,23 @@
+# 비밀값 — 절대 커밋 금지 (GitHub Secrets로만)
+api_keys.env
+.env
+keyt/.env
+naver_profile/
+tistory_profile/
+storage_state.json
+*.b64
+# 실행 산출물
+.venv/
+keyt/.venv/
+__pycache__/
+*.pyc
+logs/
+outputs/*
+!outputs/cache/
+outputs/cache/*
+!outputs/cache/kw_volumes.json
+debug_shots/
+golden_ctx.json
+.pipeline.lock
+keyt/results/
+keyt/state/

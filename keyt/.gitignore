@@ -1,0 +1,31 @@
+# Python 캐시와 테스트 캐시
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 가상환경과 로컬 패키지
+.venv/
+venv/
+node_modules/
+
+# 실제 API 키와 개인 설정
+.env
+config.json
+
+# 개인 실행 결과와 선택 이력
+results/
+outputs/
+state/
+selected_keywords.csv
+
+# 배포 산출물
+dist/
+*.zip
+
+# 편집기와 운영체제 파일
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

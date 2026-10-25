@@ -1,0 +1,409 @@
+{
+  "name": "네이버 블로그 자동 임시저장 (하루5회 KST 05/10/14/17/20시 + 놓치면 3시간 간격 보충, 발행은 수동)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 5 * * *"
+            }
+          ]
+        }
+      },
+      "name": "매일 오전 5시 (KST)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        140
+      ],
+      "id": "trigger-0200",
+      "notes": "2026-09-01: 하루 3회(2/4/6시)에서 하루 2회(9시/14시)로 재변경 — 사용자 요청. cron은 워크플로 settings.timezone(Asia/Seoul) 기준으로 해석된다. (2026-09-01: 3회 스케줄 05/10/14시로 복귀)"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 10 * * *"
+            }
+          ]
+        }
+      },
+      "name": "매일 오전 10시 (KST)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        300
+      ],
+      "id": "trigger-0400",
+      "notes": "2026-09-01: 하루 3회(2/4/6시)에서 하루 2회(9시/14시)로 재변경 — 사용자 요청. cron은 워크플로 settings.timezone(Asia/Seoul) 기준으로 해석된다. (2026-09-01: 3회 스케줄 05/10/14시로 복귀)"
+    },
+    {
+      "parameters": {
+        "command": "set NAVER_ID=livinglegeno&& \"C:\\Users\\xxix9\\Desktop\\auto\\blog\\naverblogpipeline\\.venv\\Scripts\\python.exe\" \"C:\\Users\\xxix9\\Desktop\\auto\\blog\\naverblogpipeline\\run_daily_post.py\""
+      },
+      "name": "블로그 자동생성+임시저장 실행",
+      "notes": "topics.md가 비어있으면 스크립트 내부에서 keyt(실제 검색량 기반 후보) + Claude 웹검색 검증을 자동으로 돌려서 오늘 주제를 스스로 찾는다. n8n 커맨드 자체는 안 바뀜 — 전부 run_daily_post.py 내부(get_next_topic -> _discover_hot_topic)에서 처리됨. 2026-08-20 keyt 연동 반영.",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        460,
+        300
+      ],
+      "id": "exec-run-daily"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "cond-success",
+                    "leftValue": "={{$json.exitCode}}",
+                    "rightValue": 0,
+                    "operator": {
+                      "type": "number",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "성공"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "cond-no-topic",
+                    "leftValue": "={{$json.exitCode}}",
+                    "rightValue": 1,
+                    "operator": {
+                      "type": "number",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "주제없음"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "name": "결과 분기 (성공/주제없음/실패)",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        700,
+        300
+      ],
+      "id": "switch-result"
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "message",
+              "value": "✅ 네이버 임시저장 완료 — 확인 후 발행 버튼 눌러주세요: {{$json.stdout}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "성공 알림 메시지 구성",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        960,
+        150
+      ],
+      "id": "set-success-msg"
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "message",
+              "value": "ℹ️ 오늘 쓸 주제 없음 — topics.md도 비어있고 keyt 후보 중 검증 통과한 것도 없음 (실패 아님, topics.md에 직접 주제를 추가하면 다음 실행에 반영됨)"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "주제없음 알림 메시지 구성",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        960,
+        300
+      ],
+      "id": "set-notopic-msg"
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "message",
+              "value": "❌ 네이버 임시저장 실패: {{$json.stderr}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "실패 알림 메시지 구성",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        960,
+        450
+      ],
+      "id": "set-fail-msg"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "*/30 * * * *"
+            }
+          ]
+        }
+      },
+      "name": "30분마다 보충 실행 확인",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        640
+      ],
+      "id": "trigger-catchup",
+      "notes": "2026-08-26 추가. PC가 꺼져 있어서 새벽 02/04/06시 예약이 통째로 날아간 경우를 위한 감시자. 30분마다 catchup_guard.py를 부르지만, 실제로 파이프라인을 돌리는 건 '오늘 성공 횟수가 지나간 예약 횟수보다 밀려 있고 + 마지막 시도로부터 3시간이 지났을 때'뿐이다. 평소(정상적으로 3회 다 돈 날)에는 아무것도 하지 않고 즉시 종료한다."
+    },
+    {
+      "parameters": {
+        "command": "set NAVER_ID=livinglegeno&& \"C:\\Users\\xxix9\\Desktop\\auto\\blog\\naverblogpipeline\\.venv\\Scripts\\python.exe\" \"C:\\Users\\xxix9\\Desktop\\auto\\blog\\naverblogpipeline\\catchup_guard.py\""
+      },
+      "name": "놓친 예약 보충 실행 (catchup_guard)",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        460,
+        640
+      ],
+      "id": "exec-catchup",
+      "notes": "catchup_guard.py가 스스로 판단해서 필요할 때만 run_daily_post.py를 실행한다. 할 일이 없으면 exit 0으로 조용히 끝나므로 '성공' 분기로 빠지는데, 그때 stdout에 '보충 불필요 — ...' 사유가 찍힌다."
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 14 * * *"
+            }
+          ]
+        }
+      },
+      "name": "매일 오후 2시 (KST)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        300
+      ],
+      "id": "trigger-1400",
+      "notes": "2026-09-01: 하루 3회(2/4/6시)에서 하루 2회(9시/14시)로 재변경 — 사용자 요청. cron은 워크플로 settings.timezone(Asia/Seoul) 기준으로 해석된다. (2026-09-01: 3회 스케줄 05/10/14시로 복귀)"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 17 * * *"
+            }
+          ]
+        }
+      },
+      "name": "매일 오후 5시 (KST)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        460
+      ],
+      "id": "trigger-1700",
+      "notes": "2026-09-07 추가: 하루 3회(05/10/14시)에서 5회(05/10/14/17/20시)로 확대 — 사용자 요청. cron은 워크플로 settings.timezone(Asia/Seoul) 기준으로 해석된다."
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 20 * * *"
+            }
+          ]
+        }
+      },
+      "name": "매일 오후 8시 (KST)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        540
+      ],
+      "id": "trigger-2000",
+      "notes": "2026-09-07 추가: 하루 3회(05/10/14시)에서 5회(05/10/14/17/20시)로 확대 — 사용자 요청. cron은 워크플로 settings.timezone(Asia/Seoul) 기준으로 해석된다."
+    }
+  ],
+  "connections": {
+    "블로그 자동생성+임시저장 실행": {
+      "main": [
+        [
+          {
+            "node": "결과 분기 (성공/주제없음/실패)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "결과 분기 (성공/주제없음/실패)": {
+      "main": [
+        [
+          {
+            "node": "성공 알림 메시지 구성",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "주제없음 알림 메시지 구성",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "실패 알림 메시지 구성",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "30분마다 보충 실행 확인": {
+      "main": [
+        [
+          {
+            "node": "놓친 예약 보충 실행 (catchup_guard)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "놓친 예약 보충 실행 (catchup_guard)": {
+      "main": [
+        [
+          {
+            "node": "결과 분기 (성공/주제없음/실패)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "매일 오전 5시 (KST)": {
+      "main": [
+        [
+          {
+            "node": "블로그 자동생성+임시저장 실행",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "매일 오전 10시 (KST)": {
+      "main": [
+        [
+          {
+            "node": "블로그 자동생성+임시저장 실행",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "매일 오후 2시 (KST)": {
+      "main": [
+        [
+          {
+            "node": "블로그 자동생성+임시저장 실행",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "매일 오후 5시 (KST)": {
+      "main": [
+        [
+          {
+            "node": "블로그 자동생성+임시저장 실행",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "매일 오후 8시 (KST)": {
+      "main": [
+        [
+          {
+            "node": "블로그 자동생성+임시저장 실행",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Seoul"
+  },
+  "pinData": {},
+  "id": "a6ea2f75-52d1-42c8-9414-27bad8e534a1"
+}
