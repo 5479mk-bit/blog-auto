@@ -101,7 +101,7 @@ jobs:
           tail -60 logs/run_daily_post.log || true
 
       - name: 상태 저장(발행 이력·중복 방지)
-        if: always()
+        if: always() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
         run: |
           git config user.name "blog-bot"
           git config user.email "blog-bot@users.noreply.github.com"
