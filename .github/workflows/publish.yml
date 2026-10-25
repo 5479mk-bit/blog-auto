@@ -98,7 +98,7 @@ jobs:
           else
             xvfb-run -a .venv/bin/python run_daily_post.py || echo "::warning::run_daily_post 종료 코드 $?"
           fi
-          grep -a "채택(\|발행 완료\|\[gate\]\|사전조건\|state\]" logs/run_daily_post.log | tail -15 || true
+          tail -60 logs/run_daily_post.log || true
 
       - name: 상태 저장(발행 이력·중복 방지)
         if: always()
@@ -113,10 +113,9 @@ jobs:
 
       - name: 로그 보관
         if: always()
+        continue-on-error: true   # 계정 아티팩트 저장 한도에 걸려도 실행 자체는 성공 처리
         uses: actions/upload-artifact@v4
         with:
           name: logs-${{ github.run_id }}
-          path: |
-            logs/
-            outputs/images/
-          retention-days: 7
+          path: logs/
+          retention-days: 3

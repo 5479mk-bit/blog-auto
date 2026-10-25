@@ -382,6 +382,10 @@ def main() -> int:
             def do_GET(self):
                 if self.path == "/health":
                     self._json(200, {"ok": True})
+                elif self.path == "/cookies":  # 2026-10-25: 클라우드(GitHub Actions)로 로그인 세션 쿠키를 옮기기 위한 로컬 전용 엔드포인트
+                    import base64, gzip
+                    ck = [c for c in context.cookies() if any(dm in c.get("domain", "") for dm in ("tistory.com", "kakao.com", "daum.net"))]
+                    self._json(200, {"ok": True, "n": len(ck), "b64": base64.b64encode(gzip.compress(json.dumps(ck).encode())).decode()})
                 else:
                     self._json(404, {"ok": False, "error": "not found"})
 

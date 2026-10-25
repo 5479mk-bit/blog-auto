@@ -115,8 +115,8 @@ def _clean_subprocess_env() -> dict:
     (2026-08-31 실측) 때문에 전부 제거한 환경에서 띄운다."""
     env = os.environ.copy()
     for key in list(env):
-        if key.startswith("CLAUDE") or key.startswith("ANTHROPIC"):
-            del env[key]
+        if (key.startswith("CLAUDE") or key.startswith("ANTHROPIC")) and key not in ("CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CLI_PATH"):
+            del env[key]  # 구독 토큰(클라우드 실행용)은 남긴다
     return env
 
 
