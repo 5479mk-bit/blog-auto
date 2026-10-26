@@ -1,0 +1,67 @@
+name: tistory-login
+
+# 휴대폰만으로 티스토리 쿠키 갱신: Run workflow → 1~2분 뒤 qr-login 브랜치의 qr_login.png 열기 →
+# 카카오톡 '코드스캔'으로 승인 → 쿠키가 자동으로 Secret(TISTORY_COOKIES)에 저장된다.
+# 준비물(한 번만): Secret GH_PAT = 이 저장소에 'Secrets: Read and write' 권한을 준 fine-grained 토큰.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  login:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TZ: Asia/Seoul
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: GH_PAT 확인
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: '[ -n "$GH_PAT" ] || { echo "::error::Secret GH_PAT가 없습니다 — 쿠키를 Secret에 저장할 수 없어요"; exit 1; }'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 환경
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -q -r requirements.txt
+          .venv/bin/python -m playwright install --with-deps chrome
+          sudo apt-get install -y -qq fonts-noto-cjk > /dev/null
+
+      - name: QR 이미지 업로드 훅
+        run: |
+          cat > .qr_push.sh <<'SH'
+          set -e
+          d=$(mktemp -d); cp qr_login.png "$d/"
+          cd "$d"; git init -q; git checkout -q -b qr-login
+          git -c user.name=blog-bot -c user.email=blog-bot@users.noreply.github.com add qr_login.png
+          git -c user.name=blog-bot -c user.email=blog-bot@users.noreply.github.com commit -q -m "QR $(date +%H:%M:%S)"
+          git push -q -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" qr-login
+          echo "QR 업로드: https://github.com/${GITHUB_REPOSITORY}/blob/qr-login/qr_login.png"
+          SH
+
+      - name: QR 로그인(최대 10분 대기)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: .venv/bin/python tistory_qr_login.py
+
+      - name: 쿠키를 Secret에 저장
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          gh secret set TISTORY_COOKIES --repo "$GITHUB_REPOSITORY" < tistory.b64
+          rm -f tistory.b64
+          echo "TISTORY_COOKIES 갱신 완료"
+
+      - name: QR 브랜치 정리
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: git push -q "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" --delete qr-login || true

@@ -47,12 +47,29 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
+def _try_kakao_sso(page) -> None:
+    """2026-10-26: 티스토리 자체 세션(TSSESSION)은 금방 끊기지만 카카오 계정 쪽 '로그인 유지'
+    쿠키는 훨씬 오래 산다. Actions에선 아무도 '카카오계정으로 로그인' 버튼을 안 눌러서 매번
+    로그인 실패로 끝났다 → 버튼(과 카카오 '계속하기' 확인)을 대신 눌러 자동 재로그인시킨다."""
+    for label in ("카카오계정으로 로그인", "카카오 계정으로 로그인", "계속하기"):
+        try:
+            btn = page.get_by_text(label, exact=False).first
+            if btn.is_visible(timeout=500):
+                btn.click(timeout=3000)
+                page.wait_for_timeout(3000)
+                return
+        except Exception:
+            pass
+
+
 def _wait_for_login(page, timeout_sec: int = 600) -> bool:
     deadline = time.time() + timeout_sec
     stable_since = None
     while time.time() < deadline:
         url = page.url
         looks_logged_in = "/manage" in url and "login" not in url and "kakao" not in url
+        if not looks_logged_in:
+            _try_kakao_sso(page)
         if looks_logged_in:
             if stable_since is None:
                 stable_since = time.time()

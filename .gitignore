@@ -21,3 +21,4 @@ golden_ctx.json
 .pipeline.lock
 keyt/results/
 keyt/state/
+qr_login.png
