@@ -455,13 +455,8 @@ def _engine_candidates() -> list[tuple[float, str, dict]]:
     places, toks = set(_recent_used_places().keys()), set(_used_token_map().keys())
     exclude_kw |= _SKIPPED_KW  # 이번 실행에서 품질 게이트로 버린 키워드는 다시 고르지 않는다
     out = []
-    # 2026-10-21 사용자 결정: K팝 팬덤 최우선, 전국 축제 2순위, 서울 팝업(핫)·시즌은 보조. 서울 데이트코스(황금)는 중단.
-    weights = {"kpop": 1.0, "festival": 1.0, "hot": 0.6, "season": 0.7}  # kpop은 pick_kpop 안에서 이미 ×1.5
-    # 크리에이터 어드바이저: 주제가 분산됨 → 메인 카테고리(공연/전시/행사) 중심 유지. 핫플/데이트 계열(핫·시즌)은 하루 1편까지.
-    today_cats = [c for d, c in (st.get("cats") or []) if d == datetime.now().strftime("%Y-%m-%d")]
-    if sum(1 for c in today_cats if c not in EVENT_CATS) >= 1:
-        weights["hot"] = weights["season"] = 0.0
-        print("[topic] 오늘 핫플/데이트 글 1편 발행됨 — 메인 카테고리(K팝·축제)만 후보", flush=True)
+    # 2026-10-26 사용자 지시: 블로그 핵심 축(행사·갈만한곳·데이트코스·팝업)에 맞추어 핫플/팝업/시즌성 가중치 대폭 상향
+    weights = {"hot": 1.3, "season": 1.2, "festival": 1.0, "kpop": 0.8}
     for kind, fn in (("kpop", lambda: pick_kpop(_kpop_llm_events(), exclude_kw)),
                      ("festival", lambda: pick_festival(exclude_kw, toks)),
                      ("hot", lambda: pick_hot(_hot_llm_names(), places, toks, [])),
@@ -541,10 +536,18 @@ def _kpop_llm_events() -> list[dict]:
 
 def _hot_llm_names() -> list[str]:
     """웹검색으로 지금 수도권에서 화제인 팝업스토어·전시·행사 이름을 모은다(서울시 행사에 없는 팝업 보완). 실패하면 빈 목록."""
-    prompt = (f"오늘은 {datetime.now():%Y-%m-%d}(KST)다. 웹검색(뉴스 우선)으로 **최근 3일 안에 발표됐거나 7일 안에 오픈하는** 수도권(서울·경기·인천) "
-              "팝업스토어·전시·행사·공연·신규 오픈 핫플 이름을 6~8개 찾아라. 유명 브랜드·연예인·캐릭터·IP가 걸린 것(팬덤 검색이 몰릴 것)을 우선한다. "
-              "연예 가십·정치·사건사고 제외. 이미 끝난 것 제외. 이름에 브랜드/출연자 이름을 포함한 정식 명칭(예: '슈퍼드라이 박지훈 팝업')으로. "
-              "정식 명칭만 한 줄에 하나씩, 번호·설명·기호 없이 이름만 출력한다.")
+    prompt = (f"오늘은 {datetime.now():%Y-%m-%d}(KST)다. 웹검색으로 **현재 2030 및 SNS(인스타그램 릴스, X/트위터)에서 바이럴 중이거나, "
+              "네이버 실시간 검색량 급상승·사전예약/오픈런 경쟁이 치열한** 수도권(서울·경기·인천) 화제의 팝업스토어·체험 전시·대형 신상 핫플 정식 명칭을 8~10개 찾아라.\n\n"
+              "★ 검색 유입이 폭발하는 최우선 기준:\n"
+              "1. 사전예약·티켓팅 피켓팅 팝업/전시 (예: 더현대 크리스마스 빌리지 예약, 대형 백화점 크리스마스 마켓, 네이버·인터파크 예약 치열한 미디어아트/체험전시)\n"
+              "2. 대형 IP·인기 캐릭터·애니·게임·웹툰 공식 팝업스토어 (예: 산리오, 짱구, 포켓몬, 슬램덩크 등 2030 팬덤 집결지)\n"
+              "3. 성수동·더현대 서울·잠실 롯데·한남·홍대에서 웨이팅/오픈런이 폭발하고 있는 대형 브랜드 팝업 및 신상 핫플\n"
+              "4. 지금 당장 검색량이 터지는 시즌 한정 가볼만한곳 (가을 단풍 명소, 야경/빛축제, 가을 나들이 데이트코스)\n\n"
+              "★ 절대 제외:\n"
+              "- 대중 검색량이 거의 없는 기업 홍보성 단순 보도자료 팝업 (B2B, 중소 패션브랜드 단순 매장 오픈 등)\n"
+              "- 이미 완전히 종료된 행사\n\n"
+              "★ 출력 형식:\n"
+              "검색자가 네이버 검색창에 실제로 입력하는 '정식 명칭'만 한 줄에 하나씩, 번호·설명·기호 없이 이름만 출력한다.")
     try:
         out = _call_claude(prompt, allowed_tools="WebSearch", timeout=300)
     except ClaudeSessionLimitError:
@@ -557,7 +560,7 @@ def _hot_llm_names() -> list[str]:
         l = re.sub(r"^[\s\-\*\d\.\)]+", "", l).strip()
         if 2 <= len(l) <= 30 and not re.search(r"[:：]|http|출처|Sources", l):
             names.append(l)
-    return names[:8]
+    return names[:10]
 
 
 def _hot_topic() -> str | None:
