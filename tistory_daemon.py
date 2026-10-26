@@ -51,7 +51,7 @@ def _try_kakao_sso(page) -> None:
     """2026-10-26: 티스토리 자체 세션(TSSESSION)은 금방 끊기지만 카카오 계정 쪽 '로그인 유지'
     쿠키는 훨씬 오래 산다. Actions에선 아무도 '카카오계정으로 로그인' 버튼을 안 눌러서 매번
     로그인 실패로 끝났다 → 버튼(과 카카오 '계속하기' 확인)을 대신 눌러 자동 재로그인시킨다."""
-    for label in ("카카오계정으로 로그인", "카카오 계정으로 로그인", "계속하기"):
+    for label in ("카카오계정으로 로그인", "카카오 계정으로 로그인", "계속하기", "Continue"):
         try:
             btn = page.get_by_text(label, exact=False).first
             if btn.is_visible(timeout=500):

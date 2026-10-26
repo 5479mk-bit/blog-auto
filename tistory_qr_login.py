@@ -59,8 +59,8 @@ def main() -> int:
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         page.goto(MANAGE_URL, timeout=30000)
         page.wait_for_timeout(2000)
-        _click(page, "카카오계정으로 로그인", "카카오 계정으로 로그인")
-        _click(page, "QR코드 로그인", "QR 코드 로그인", "QR코드로 로그인")
+        _click(page, "카카오계정으로 로그인", "카카오 계정으로 로그인", "Kakao Account")
+        _click(page, "QR코드 로그인", "QR 코드 로그인", "QR코드로 로그인", "QR code")
         print(f"QR 화면 준비 — 현재 주소: {page.url}", flush=True)
         deadline, last_shot, stable = time.time() + 600, 0.0, None
         while time.time() < deadline:
@@ -72,9 +72,10 @@ def main() -> int:
             else:
                 stable = None
                 if "kakao" not in url:      # 승인 후 '계속하기' 같은 확인 화면
-                    _click(page, "계속하기", "동의하고 계속하기")
-                if time.time() - last_shot > 25:  # QR은 몇 분마다 바뀐다 → 주기적으로 다시 올림
-                    _click(page, "재발급", "새로고침")
+                    _click(page, "계속하기", "동의하고 계속하기", "Continue")
+                if "kakao" in url and time.time() - last_shot > 25:
+                    _click(page, "QR코드 로그인", "QR 코드 로그인", "QR code")  # 아직 ID/PW 화면이면 QR 탭으로(QR은 몇 분마다 바뀌어 주기적으로 다시 올림)
+                    _click(page, "재발급", "새로고침", "Refresh", "Reissue")
                     page.screenshot(path=str(QR_PNG))
                     _publish_qr()
                     last_shot = time.time()

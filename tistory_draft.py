@@ -27,6 +27,7 @@ WRITE_URL = f"{BLOG_URL}/manage/newpost/"
 
 _CHROME_LAUNCH_KWARGS = {
     "channel": "chrome",
+    "locale": "ko-KR",  # 2026-10-26: Actions(미국 서버)에선 카카오 화면이 영어로 떠서 버튼 문구 매칭이 실패했다
     "args": [
         "--disable-blink-features=AutomationControlled",
         # 2026-09-27 추가 — 실측 버그: 데몬 창을 최소화해두면 크로미움이 백그라운드 탭/창을
