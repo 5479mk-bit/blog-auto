@@ -81,12 +81,44 @@ def _wait_for_login(page, timeout_sec: int = 600) -> bool:
     return False
 
 
+_CATEGORY_JS = r"""(name) => {
+    const norm = s => (s || '').replace(/\s+/g, '').replace(/[\(\[]\d+[\)\]]$/, '');
+    const want = norm(name);
+    const list = document.querySelector('#category-list');
+    if (!list) return false;
+    const items = Array.from(list.querySelectorAll('*')).filter(e => e.children.length === 0 || e.matches('li, [role=option], [category-id]'));
+    const hit = items.find(e => norm(e.textContent) === want) || items.find(e => norm(e.textContent).includes(want));
+    if (!hit) return false;
+    (hit.closest('[category-id], li, [role=option]') || hit).click();
+    return true;
+}"""
+
+
 def _select_category(page, category_name: str) -> None:
-    page.click("#category-btn")
-    page.wait_for_selector("#category-list", timeout=5000)
-    page.wait_for_timeout(300)
-    page.click(f"#category-list >> text={category_name}", timeout=5000)
-    page.wait_for_timeout(300)
+    """2026-10-26: 카테고리가 '카테고리 없음'으로 발행된 사고 대응 — 정확 일치 클릭 → JS 클릭 순으로 시도하고,
+    선택 후 버튼 라벨이 실제로 바뀌었는지 검증한다. 못 맞추면 예외(발행하지 않게 호출부에서 중단)."""
+    want = category_name.replace(" ", "")
+    last_err = None
+    for attempt in range(3):
+        try:
+            page.click("#category-btn")
+            page.wait_for_selector("#category-list", timeout=5000)
+            page.wait_for_timeout(500)
+            try:
+                page.locator("#category-list").get_by_text(category_name, exact=True).first.click(timeout=3000)
+            except Exception:
+                if not page.evaluate(_CATEGORY_JS, category_name):
+                    raise RuntimeError(f"카테고리 목록에서 '{category_name}'을(를) 찾지 못함")
+            page.wait_for_timeout(500)
+            label = (page.inner_text("#category-btn") or "").replace(" ", "")
+            if want in label:
+                return
+            last_err = RuntimeError(f"선택 후 라벨이 '{label}' (기대: '{category_name}')")
+        except Exception as e:
+            last_err = e
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(500)
+    raise RuntimeError(f"카테고리 선택 실패: {last_err}")
 
 
 # 2026-10-11 — 태그 입력 실패(`waiting for locator("#tagText")` 30초 타임아웃) 대응: 에디터 UI가 바뀌어
@@ -268,10 +300,7 @@ def _save_draft(page, title: str, body_html: str, tags: list[str], category: str
     page.wait_for_selector("#post-title-inp", timeout=20000)
     page.fill("#post-title-inp", title)
     if category:
-        try:
-            _select_category(page, category)
-        except Exception as e:
-            print(f"[tistory] 카테고리 선택 실패(건너뜀): {e}", file=sys.stderr)
+        _select_category(page, category)  # 실패하면 예외 → '카테고리 없음'으로 공개 발행되지 않게 중단
     # 2026-09-27 추가 — 실측 버그: TinyMCE가 초기화되기 전에 setContent를 호출하면 조용히
     # 무시돼서 본문이 빈 채로 발행되는 사고가 실제로 있었다(창을 최소화해서 크로미움이
     # 백그라운드 탭을 스로틀링한 게 원인으로 추정 — 위 _CHROME_LAUNCH_KWARGS에서 스로틀링
