@@ -53,9 +53,17 @@ jobs:
         run: npm install -g @anthropic-ai/claude-code && claude --version
 
       - name: 시스템 패키지(가상 화면·한글 폰트)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb fonts-noto-cjk > /dev/null
+        # 2026-10-27: apt 미러가 멈춰 40분 넘게 걸린 적이 있다(concurrency 때문에 다음 슬롯까지 막힘) → 시도마다 시간 제한 + 재시도
+        timeout-minutes: 15
+        run: |
+          for i in 1 2 3; do
+            timeout 180 sudo apt-get update -qq && timeout 300 sudo apt-get install -y -qq xvfb fonts-noto-cjk > /dev/null && exit 0
+            echo "apt 재시도 $i"; sleep 10
+          done
+          exit 1
 
       - name: Python 환경
+        timeout-minutes: 20
         run: |
           python -m venv .venv
           .venv/bin/pip install -q -r requirements.txt

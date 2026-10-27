@@ -140,7 +140,41 @@ def _title_font_px(heading: str) -> int:
     return 120 if n <= 8 else 104 if n <= 12 else 88 if n <= 16 else 74 if n <= 20 else 64
 
 
+def _render_feed_cover(spec: dict) -> str:
+    """2026-10-27 홈피드용 표지: 홈피드 카드는 썸네일+제목으로 클릭을 예측하므로(작은 화면에서 한눈에 읽혀야 함)
+    사진 1장을 밝게 꽉 채우고, 가운데 띠에만 어둠을 깔아 짧은 제목(≤14자)을 크게 쓴다. 16:9로 잘려도 가운데 글자가 남는다."""
+    uri = next((u for u in (_img_data_uri(p, 1080) for p in (spec.get("collage") or [])[:3]) if u), None)
+    bg = (f'<div style="position:absolute;inset:0;background-image:url({uri});background-size:cover;background-position:center;'
+          f'filter:brightness(1.06) saturate(1.12);"></div>') if uri else f'<div style="position:absolute;inset:0;background:{NAVY};"></div>'
+    heading = html_lib.escape(spec["heading"])
+    sub = html_lib.escape(spec.get("sub", ""))
+    badge = html_lib.escape(spec.get("badge", ""))
+    n = len(spec["heading"])
+    fpx = 132 if n <= 7 else 118 if n <= 10 else 100 if n <= 14 else 84
+    badge_html = (f'<div style="display:inline-block;margin-bottom:26px;padding:10px 28px;border-radius:40px;background:#FFE14D;'
+                  f'color:#111;font-size:40px;font-weight:900;letter-spacing:-0.5px;">{badge}</div>') if badge else ""
+    return f"""
+    <div style="position:relative;width:{WIDTH}px;height:{HEIGHT}px;overflow:hidden;">
+      {bg}
+      <div style="position:absolute;inset:0;background:linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,.52) 30%,
+                  rgba(0,0,0,.58) 70%, rgba(0,0,0,0) 100%);"></div>
+      <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;">
+        <div style="text-align:center;padding:0 70px;">
+          {badge_html}
+          <div style="font-family:'Black Han Sans','Noto Sans KR',sans-serif;font-weight:400;font-size:{fpx}px;
+                      color:#fff;line-height:1.18;word-break:keep-all;letter-spacing:-1px;
+                      text-shadow:0 4px 24px rgba(0,0,0,.6);">{heading}</div>
+          <div style="margin-top:28px;font-size:46px;font-weight:900;color:#fff;word-break:keep-all;
+                      text-shadow:0 2px 14px rgba(0,0,0,.6);">{sub}</div>
+        </div>
+      </div>
+    </div>
+    """
+
+
 def _render_title(spec: dict) -> str:
+    if spec.get("style") == "feed":
+        return _render_feed_cover(spec)
     paths = (spec.get("collage") or [])[:4]
     n = len(paths)
     # 사진 1장이면 그 사진을 전체 배경으로(4칸 반복 X), 2장이면 좌우 반반, 3장이면 위 1장(넓게)+아래 2장, 4장이면 2x2.
