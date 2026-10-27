@@ -3,11 +3,11 @@ name: blog-publish
 # 하루 4편(한국시간 10·14·17·21시) + 지연/실패 보충. GitHub 예약 실행은 몇 분~수십 분 늦을 수 있다.
 on:
   schedule:
-    - cron: "0 1 * * *"    # 10:00 KST
-    - cron: "0 5 * * *"    # 14:00 KST
-    - cron: "0 8 * * *"    # 17:00 KST
-    - cron: "0 12 * * *"   # 21:00 KST
-    - cron: "40 3,7,10,13 * * *"  # 보충(catchup_guard: 밀린 슬롯만 채움)
+    - cron: "7 1 * * *"    # 10:00 KST (정각은 GitHub가 자주 누락해 7분에)
+    - cron: "7 5 * * *"    # 14:00 KST
+    - cron: "7 8 * * *"    # 17:00 KST
+    - cron: "7 12 * * *"   # 21:00 KST
+    - cron: "37 2,4,6,9,11,13 * * *"  # 보충(catchup_guard: 밀린 슬롯만 채움, 3시간 간격 규칙은 그대로)
   workflow_dispatch:
     inputs:
       dry_run:
@@ -90,7 +90,7 @@ jobs:
       - name: 발행 실행
         env:
           DRY: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
-          MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || (github.event.schedule == '40 3,7,10,13 * * *' && 'guard' || 'slot') }}
+          MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || (github.event.schedule == '37 2,4,6,9,11,13 * * *' && 'guard' || 'slot') }}
         run: |
           if [ "$DRY" = "true" ]; then export DRY_RUN=1 SKIP_VISUAL_GATE=1; echo "드라이런"; fi
           if [ "$MODE" = "guard" ]; then
