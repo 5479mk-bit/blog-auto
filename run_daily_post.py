@@ -448,6 +448,11 @@ def _golden_topic() -> str | None:
 _SKIPPED_KW: set[str] = set()
 
 
+def _feed_boost(spike) -> float:
+    """데이터랩 급상승률(최근 2일 ÷ 이전 5일) → 홈피드 가산 배수 1.0~2.0."""
+    return 1 + 0.5 * min(max((spike or 1.0) - 1, 0), 2)
+
+
 def _engine_candidates() -> list[tuple[float, str, dict]]:
     """(예상 일유입, 엔진, 후보) 목록. 엔진 하나가 실패해도 나머지로 진행.
     2026-10-27 리밸런싱: 엔진마다 상위 5개 후보(alts 포함)를 모두 황금지수(검색량 ÷ 블로그 문서 수)로 다시 채점하고,
@@ -493,7 +498,17 @@ def _engine_candidates() -> list[tuple[float, str, dict]]:
         if not g:
             continue
         best = None
-        for c in [g] + list(g.pop("alts", None) or []):
+        cands = [g] + list(g.pop("alts", None) or [])
+        try:  # 홈피드 가산용 급상승률을 모든 엔진 후보에 측정(핫 엔진은 이미 있음). 검색이 거의 없는 키워드의 잡음성 급등은 무시.
+            from golden_keywords import _datalab_spikes
+            sp = _datalab_spikes([c["keyword"] for c in cands if c.get("spike") is None])
+            for c in cands:
+                v = sp.get(c["keyword"])
+                if v and c.get("spike") is None:
+                    c["spike"] = v["spike"] if v["recent"] >= 1.0 else 1.0
+        except Exception as e:
+            print(f"[topic] 급상승률 측정 실패({type(e).__name__}) — 홈피드 가산 없이 진행", file=sys.stderr)
+        for c in cands:
             if _norm_place(c["keyword"]) in exclude_kw:
                 continue
             try:
@@ -502,13 +517,15 @@ def _engine_candidates() -> list[tuple[float, str, dict]]:
                 preempt = kind in ("hot", "kpop") or (c.get("days_to_start") or 0) > 0 or (c.get("days_left") or 0) > 0
                 r = refine_keyword(c["keyword"], int(c.get("volume") or 0), rel, preempt, exclude_kw)
                 c.update(title_kw=r["title_kw"], title_volume=r["volume"], docs=r["docs"], sat=r["sat"], head_docs=r["head_docs"])
-                base = r["exp"] * (1 + 0.3 * min(max((c.get("spike") or 1.0) - 1, 0), 3))  # 데이터랩 급상승 가산 유지
+                # 홈피드 가산(2026-10-27): 홈피드 리트리버 중 'AfterSearch'가 사용자가 방금 검색한 것과 관련된 글을 추천한다
+                # (DAN24 발표 정리). 검색이 급상승 중인 주제는 검색 순위와 별개로 홈피드 노출 기회가 크다 → 최대 2배.
+                base = r["exp"] * _feed_boost(c.get("spike"))
             except ClaudeSessionLimitError:
                 raise
             except Exception as e:
                 print(f"[topic] 황금지수 계산 실패({type(e).__name__}) — 기존 추정 사용", file=sys.stderr)
                 base = float(c.get("exp") or 0)
-            if c.get("sat") is not None and c["sat"] > MAX_SATURATION:
+            if c.get("sat") is not None and c["sat"] > MAX_SATURATION and _feed_boost(c.get("spike")) < 1.25:  # 급상승 주제는 홈피드로 살린다
                 print(f"[topic]   탈락(문서 포화 {c['sat']}배): {c['keyword']!r}", flush=True)
                 continue
             exp = round(base * w, 1)
@@ -1307,7 +1324,8 @@ def _event_title_rule(research: dict) -> str:
                 f"예: '{kw} 티켓팅 일정과 좌석 시야 정리'.")
     return (f"'{kw}'를 띄어쓰기까지 그대로 맨 앞에 두고, 데이터에 있는 세부 1~2개(셔틀·먹거리·입장료·시간표 중, 키워드에 이미 있는 단어는 반복 금지) + "
             "자연스러운 꼬리('방문 전 알아둘 것', '가기 전 체크' 등). 25~35자, 나열형·괄호 덕지덕지 금지. "
-            f"예: '{kw} 셔틀버스와 먹거리 부스, 가기 전 체크'. ('총정리'·'완벽 가이드' 금지)")
+            f"예: '{kw} 셔틀버스와 먹거리 부스, 가기 전 체크', '{kw} 주차 대신 셔틀이 빠른 이유'. "
+            "꼬리는 홈피드 카드에서도 눌리게 구체적 이득·상황 한 마디로(본문에서 실제로 답하는 것만, 낚시 금지). ('총정리'·'완벽 가이드' 금지)")
 
 
 def _build_system_prompt() -> str:
@@ -1445,7 +1463,7 @@ def _seo_rules(research: dict) -> str:
         return ""
     rel = ", ".join(f"{r['kw']}(월 {r['total']:,})" for r in (research.get("seo_keywords") or [])[:8])
     return (f"12. ★ 황금 키워드(일 방문자 목표용): **{kw}** (월 검색량 {research.get('golden_volume', 0):,}회). 네이버용 제목은 이 키워드로 **앞 12자 안에서 시작**하고, "
-            f"도입 첫 문장·`##` 소제목 2곳 이상·FAQ 질문 2곳에 **띄어쓰기까지 똑같이** 넣는다(검색어 일치). 네이버 제목은 '{kw} + 실제로 궁금해할 세부 2개'로 짧고 정확하게. "
+            f"도입 첫 문장·`##` 소제목 2곳 이상·FAQ 질문 2곳에 **띄어쓰기까지 똑같이** 넣는다(검색어 일치). 네이버 제목은 '{kw} + 실제로 궁금해할 세부 2개'로 짧고 정확하게. ★홈피드(네이버 앱 추천 피드)는 썸네일+제목만 보고 클릭을 예측하므로, 세부 2개 중 하나는 나열어가 아니라 **구체적 이득·상황 한 마디**로 쓴다(예: '웨이팅 짧은 시간대', '비 와도 괜찮은 이유', '셔틀이 더 빠른 이유', '무료로 즐기는 법'). 본문에서 실제로 답하는 내용만(낚시·과장 금지 — 클릭 후 만족도도 함께 평가된다). "
             f"연관 키워드({rel})는 소제목·FAQ·본문에 한 번씩 문맥에 맞게 섞는다(억지 반복·나열 금지). "
             f"{_longtail_rule(kw) if research.get('hot') else ''}"
             "13. 서울시 공식 행사 데이터의 날짜·요금·시간·링크는 그대로 정확히 쓰고, 마감이 가까운 행사는 '곧 끝나요'처럼 시의성을 한 줄 넣는다.")
@@ -2157,7 +2175,7 @@ _PHOTO_QUERY = {"POPUP_ROUNDUP": "pop up store interior", "HOTPLACE": "cafe inte
 
 def make_slides(research: dict, post: dict, photos: list[dict] | None = None) -> list[dict]:
     """05_이미지_팀원: 표지 1장 + 요약 1장. LLM 없이 리서치 데이터로 직접 설계한다(호출 절약).
-    표지 배경 = 수집한 실제 핫플 실사 4장을 2x2로 합친 콜라주(Unsplash 스톡 사진은 쓰지 않는다) + 검은 반투명 레이어 + 흰 제목.
+    표지 = 홈피드 썸네일(2026-10-27): 실제 사진 1장을 밝게 + 가운데 띠만 어둡게 + 짧은 제목·노란 배지(render_slides style=feed).
     요약 카드 = 코스 스팟 표(긴 글자는 render_slides가 자동 줄바꿈/글자 축소로 처리)."""
     try:
         from render_slides import render_slides
@@ -2176,7 +2194,9 @@ def make_slides(research: dict, post: dict, photos: list[dict] | None = None) ->
     # 콜라주용 사진: 메인 스팟 사진을 먼저, 모자라면 주변 스팟 사진. 서로 다른 파일 최대 4장(모자라면 render_slides가 반복 배치).
     ordered = sorted(photos or [], key=lambda p: p.get("place_idx", 99))
     collage = list(dict.fromkeys(p["path"] for p in ordered if p.get("path")))[:4]
-    slides = [{"type": "title", "heading": heading, "sub": sub[:26], "collage": collage}]
+    # 2026-10-27 홈피드: 표지 = 홈피드 썸네일. 사진 1장 밝게 + 짧은 제목(단어 단위로 자름, 글자 중간 잘림 금지) + 노란 배지.
+    heading, badge = _cover_text(research, heading)
+    slides = [{"type": "title", "style": "feed", "heading": heading, "sub": sub[:24], "badge": badge, "collage": collage}]
     rows = []
     for p in mains[:2]:
         name = str(p.get("place_name", "")).strip()
@@ -2204,6 +2224,46 @@ def make_slides(research: dict, post: dict, photos: list[dict] | None = None) ->
         cap = slide.get("heading") or "코스 요약"
         results.append({"path": str(path), "after_text": None, "caption": cap, "_type": slide["type"]})
     return results
+
+
+def _cut_words(text: str, limit: int) -> str:
+    """limit 글자 안에서 단어 단위로 자른다(글자 중간에서 끊긴 표지 제목 방지)."""
+    text = re.sub(r"\s+", " ", re.sub(r"\([^)]*\)|\[[^\]]*\]", " ", text)).strip()
+    if len(text) <= limit:
+        return text
+    out = ""
+    for w in text.split(" "):
+        if len((out + " " + w).strip()) > limit:
+            break
+        out = (out + " " + w).strip()
+    return out or text[:limit]
+
+
+def _cover_text(research: dict, fallback: str) -> tuple[str, str]:
+    """홈피드 썸네일용 (제목, 배지). 제목 = 주인공 이름(행사/팝업/장소) 14자 이내, 배지 = 기간·성격 한마디."""
+    mains = research.get("main_places") or []
+    cat = research.get("topic_category")
+    # 행사 글은 행사명, 그 밖에는 이 글의 주제 키워드(검색·관심사와 같은 말), 없으면 메인 장소명
+    names = ([mains[0].get("event_name")] if mains and cat in EVENT_CATS else []) + [research.get("golden_keyword")] \
+        + ([mains[0].get("place_name")] if mains else [])
+    name = next((str(n) for n in names if n and len(_cut_words(str(n), 14)) >= 4), "")
+    heading = _cut_words(name or fallback, 14) or _cut_words(fallback, 14)
+    hours = _short(mains[0].get("operating_hours"), 120) if mains else ""
+    iso = re.search(r"\d{4}-(\d\d)-(\d\d)\s?[~∼-]\s?\d{4}-(\d\d)-(\d\d)", hours)
+    m = re.search(r"\d{1,2}[./월]\s?\d{1,2}일?\s?[~∼-]\s?(?:\d{1,2}[./월]\s?)?\d{1,2}일?", hours)
+    if iso:
+        badge = f"{int(iso.group(1))}.{int(iso.group(2))}~{int(iso.group(3))}.{int(iso.group(4))}"
+    elif m:
+        badge = re.sub(r"\s+", "", m.group(0))
+    elif cat == "KPOP":
+        badge = "라인업·티켓팅"
+    elif cat == "FESTIVAL":
+        badge = "축제 가기 전 체크"
+    elif research.get("hot"):
+        badge = "지금 핫한 곳"
+    else:
+        badge = "하루 동선 정리" if "데이트" in heading or "코스" in heading else "주말 데이트 코스"
+    return heading, badge[:14]
 
 
 def _short(v, n: int = 60) -> str:
