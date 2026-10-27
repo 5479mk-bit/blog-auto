@@ -389,6 +389,8 @@ def record_used(research: dict, topic: str) -> None:
         st["recent_regions"] = (st.get("recent_regions") or [])[-5:] + [region]
     if research.get("golden_keyword"):
         st.setdefault("keywords", {})[_norm_place(research["golden_keyword"])] = now
+    if research.get("title_keyword"):  # 롱테일 제목 키워드도 기록 — 상시 키워드 60일 재사용 금지에 걸리도록
+        st.setdefault("keywords", {})[_norm_place(research["title_keyword"])] = now
     _mtxt = " ".join(str(p.get("place_name", "")) for p in research.get("main_places", [])).lower()
     for title in research.get("golden_event_titles") or []:
         if not (_name_tokens(title) & set(_name_tokens(_mtxt)) or any(t in _mtxt for t in _name_tokens(title))):
@@ -447,20 +449,40 @@ _SKIPPED_KW: set[str] = set()
 
 
 def _engine_candidates() -> list[tuple[float, str, dict]]:
-    """(예상 일유입, 엔진, 후보) 목록. 엔진 하나가 실패해도 나머지로 진행."""
-    from golden_keywords import pick_festival, pick_hot, pick_kpop, pick_season
+    """(예상 일유입, 엔진, 후보) 목록. 엔진 하나가 실패해도 나머지로 진행.
+    2026-10-27 리밸런싱: 엔진마다 상위 5개 후보(alts 포함)를 모두 황금지수(검색량 ÷ 블로그 문서 수)로 다시 채점하고,
+    헤드보다 노출 가능성이 높은 롱테일(주제명 + 주차/시간표/예약 …)이 있으면 그걸 제목 키워드로 쓴다.
+    가중치는 기본값 × 순위 실측 보정(rank_feedback), 같은 엔진은 하루 최대 MAX_PER_ENGINE_PER_DAY편."""
+    from golden_keywords import MAX_SATURATION, cached_volume, pick_evergreen, pick_festival, pick_hot, pick_kpop, pick_season, refine_keyword
+    from rank_feedback import MAX_PER_ENGINE_PER_DAY, engine_factors, today_engine_counts
     st = _load_used()
-    cutoff = datetime.now().timestamp() - 5 * 86400
-    exclude_kw = {_norm_place(k) for k, ts in (st.get("keywords") or {}).items() if ts >= cutoff}
+    now_ts = datetime.now().timestamp()
+    exclude_kw = {_norm_place(k) for k, ts in (st.get("keywords") or {}).items() if ts >= now_ts - 5 * 86400}
+    from golden_keywords import EVERGREEN_COOLDOWN_DAYS
+    ever_recent = {_norm_place(k) for k, ts in (st.get("keywords") or {}).items() if ts >= now_ts - EVERGREEN_COOLDOWN_DAYS * 86400}
     places, toks = set(_recent_used_places().keys()), set(_used_token_map().keys())
     exclude_kw |= _SKIPPED_KW  # 이번 실행에서 품질 게이트로 버린 키워드는 다시 고르지 않는다
-    out = []
     # 2026-10-26 사용자 지시: 블로그 핵심 축(행사·갈만한곳·데이트코스·팝업)에 맞추어 핫플/팝업/시즌성 가중치 대폭 상향
-    weights = {"hot": 1.3, "season": 1.2, "festival": 1.0, "kpop": 0.8}
+    weights = {"hot": 1.3, "season": 1.2, "festival": 1.0, "kpop": 0.8, "evergreen": 1.1}
+    try:
+        factors = engine_factors()
+    except Exception:
+        factors = {}
+    if factors:
+        print(f"[topic] 순위 실측 보정 배수: {factors}", flush=True)
+    done_today = today_engine_counts()
+    out = []
     for kind, fn in (("kpop", lambda: pick_kpop(_kpop_llm_events(), exclude_kw)),
                      ("festival", lambda: pick_festival(exclude_kw, toks)),
                      ("hot", lambda: pick_hot(_hot_llm_names(), places, toks, [])),
-                     ("season", lambda: pick_season(exclude_kw, toks))):
+                     ("season", lambda: pick_season(exclude_kw, toks)),
+                     ("evergreen", lambda: pick_evergreen(ever_recent | _SKIPPED_KW, toks))):
+        w = weights.get(kind, 1.0) * factors.get(kind, 1.0)
+        if w == 0.0:
+            continue
+        if done_today.get(kind, 0) >= MAX_PER_ENGINE_PER_DAY:
+            print(f"[topic] {kind} 엔진은 오늘 이미 {done_today[kind]}편 — 주제 쏠림 방지로 건너뜀", flush=True)
+            continue
         try:
             g = fn()
         except ClaudeSessionLimitError:
@@ -468,32 +490,35 @@ def _engine_candidates() -> list[tuple[float, str, dict]]:
         except Exception as e:
             print(f"[topic] {kind} 엔진 오류: {type(e).__name__} {str(e)[:100]}", file=sys.stderr)
             continue
-        if weights.get(kind, 1.0) == 0.0:
+        if not g:
             continue
-        if g and _norm_place(g["keyword"]) not in exclude_kw:
-            # 2026-10-27 리밸런싱: 광고 경쟁도 기반 추정 대신 블로그 문서 수로 황금 지수를 재계산하고, 헤드보다 노출 가능성이
-            # 높은 롱테일(주제명 + 주차/시간표/예약 …)이 있으면 그걸 제목 키워드로 쓴다.
+        best = None
+        for c in [g] + list(g.pop("alts", None) or []):
+            if _norm_place(c["keyword"]) in exclude_kw:
+                continue
             try:
-                from golden_keywords import cached_volume, refine_keyword
-                rel = g.get("related") or (cached_volume(g["keyword"]) or {}).get("related") or []
-                preempt = kind in ("hot", "kpop") or (g.get("days_to_start") or 0) > 0 or (g.get("days_left") or 0) > 0
-                r = refine_keyword(g["keyword"], int(g.get("volume") or 0), rel, preempt, exclude_kw)
-                g.update(title_kw=r["title_kw"], title_volume=r["volume"], docs=r["docs"], sat=r["sat"], head_docs=r["head_docs"])
-                base = r["exp"]
+                rel = list(c.get("related") or [])
+                rel += [r for r in ((cached_volume(c["keyword"]) or {}).get("related") or []) if r not in rel]
+                preempt = kind in ("hot", "kpop") or (c.get("days_to_start") or 0) > 0 or (c.get("days_left") or 0) > 0
+                r = refine_keyword(c["keyword"], int(c.get("volume") or 0), rel, preempt, exclude_kw)
+                c.update(title_kw=r["title_kw"], title_volume=r["volume"], docs=r["docs"], sat=r["sat"], head_docs=r["head_docs"])
+                base = r["exp"] * (1 + 0.3 * min(max((c.get("spike") or 1.0) - 1, 0), 3))  # 데이터랩 급상승 가산 유지
             except ClaudeSessionLimitError:
                 raise
             except Exception as e:
                 print(f"[topic] 황금지수 계산 실패({type(e).__name__}) — 기존 추정 사용", file=sys.stderr)
-                base = float(g.get("exp") or 0)
-            exp = round(base * weights.get(kind, 1.0), 1)
-            print(f"[topic] 엔진 {kind}: {g['keyword']!r} → 제목키워드 {g.get('title_kw', g['keyword'])!r} "
-                  f"월 {g.get('title_volume', g.get('volume', 0)):,} 문서 {g.get('docs', '?')} → 예상 일유입 {exp}", flush=True)
-            out.append((exp, kind, g))
-    from golden_keywords import MAX_SATURATION
-    ok = [c for c in out if c[2].get("sat") is None or c[2]["sat"] <= MAX_SATURATION]
-    if out and not ok:
-        print(f"[topic] 모든 후보가 문서 포화(문서/검색량 > {MAX_SATURATION}) — 그중 최선으로 진행", flush=True)
-    return sorted(ok or out, key=lambda t: -t[0])
+                base = float(c.get("exp") or 0)
+            if c.get("sat") is not None and c["sat"] > MAX_SATURATION:
+                print(f"[topic]   탈락(문서 포화 {c['sat']}배): {c['keyword']!r}", flush=True)
+                continue
+            exp = round(base * w, 1)
+            print(f"[topic] 엔진 {kind}: {c['keyword']!r} → 제목키워드 {c.get('title_kw', c['keyword'])!r} "
+                  f"월 {c.get('title_volume', c.get('volume', 0)):,} 문서 {c.get('docs', '?')} → 예상 일유입 {exp}", flush=True)
+            if best is None or exp > best[0]:
+                best = (exp, kind, c)
+        if best:
+            out.append(best)
+    return sorted(out, key=lambda t: -t[0])
 
 
 def _best_engine_topic() -> str | None:
@@ -523,6 +548,9 @@ def _best_engine_topic() -> str | None:
     if kind == "hot":
         return (f"{g['keyword']} [DATE_COURSE] [황금] [핫] — 선점형 화제 팝업/행사 '{g['keyword']}'({meta}"
                 + (f", 브랜드 검색량 {g['brand_volume']:,}" if g.get("brand_volume") else "") + f") (발굴: {datetime.now():%Y-%m-%d %H:%M})")
+    if kind == "evergreen":
+        return (f"{g['keyword']} [DATE_COURSE] [황금] [상시] — 상시 검색 키워드 '{g['keyword']}'({meta}, 시드 '{g.get('seed')}') "
+                f"(발굴: {datetime.now():%Y-%m-%d %H:%M})")
     if kind == "season":
         return (f"{g['keyword']} [DATE_COURSE] [황금] [시즌] — 시즌 키워드 '{g['keyword']}'({meta}, 시즌 '{g.get('seed')}' 피크까지 {g.get('days_left')}일) "
                 f"(발굴: {datetime.now():%Y-%m-%d %H:%M})")
@@ -821,6 +849,10 @@ def run_research(topic: str) -> dict:
     if "[핫]" in topic:
         seoul_block += ("\n(★ 최근 검색이 급상승한 아이템 '" + _topic_keyword(topic).replace(" 방문 코스", "") + "'가 이번 글의 메인 스팟이다. 웹검색으로 정확한 "
                         "장소·기간·운영시간·요금·예약 방법을 확인해 main_places 1~2곳에 깊게 담고, 주변 즐길 곳으로 하루 코스를 엮어라.)")
+    elif "[상시]" in topic:
+        seoul_block += ("\n(★ 상시 검색 키워드 '" + _topic_keyword(topic) + "'로 들어온 사람이 원하는 답(어디로 가면 좋은지·무엇을 하는지·얼마·어떻게 가는지)을 주는 글이다. "
+                        "이 키워드에 딱 맞는 지역/테마를 정하고, 지금 시기에 실제로 가볼 만한 대표 장소(진행 중인 전시·팝업이 있으면 우선) 1~2곳을 main_places로, "
+                        "함께 묶이는 곳을 nearby_spots로 구성한다. 행사가 끝나도 오래 읽힐 수 있게 상설 장소 위주로, 기간 한정 정보는 기간을 명시한다.)")
     elif "[시즌]" in topic:
         seoul_block += ("\n(★ 시즌 검색 키워드 '" + _topic_keyword(topic) + "'로 들어온 사람의 질문(시간표·요금·예약·주차·가는 법·절정 시기 등)에 정확히 답하는 글이다. "
                         "main_places는 이 키워드가 가리키는 실제 장소/행사 1~2곳(올해 정보로 확인), nearby_spots는 함께 들르기 좋은 곳이다.)")
@@ -1251,7 +1283,7 @@ _WRITE_EVENT_RULES = """
 7. 네이버용: `ㆍ라벨 : 값` 요약 박스, `> ` 인용구, `##`/`###`, `==강조==`. 티스토리용: Markdown(표 포함).
 8. 첫 문장은 검색자가 가장 궁금한 답(언제·어디·누가)으로 바로 시작. FAQ 4~6개. 기준일({date_basis}) 표기. 분량 공백 포함 3,000~4,200자.
 9. ★제목 공식: {title_rule}
-   연도(2026)·지역명·'총정리'는 써도 된다. 네이버 제목 30~45자. 티스토리 제목은 같은 키워드에 다른 세부 조합.
+   연도(2026)·지역명은 써도 된다('총정리'·'완벽 정리'는 금지). 네이버 제목 25~38자. 티스토리 제목은 같은 키워드에 다른 세부 조합.
 10. 설명 없이 JSON 객체 하나만 출력.
 {seo_rules}"""
 
@@ -1627,7 +1659,7 @@ _BANNED_BODY = re.compile(
     r"알아보겠습니다|살펴보겠습니다|소개합니다|다음과\s?같(?:다|습니다)|아래와\s?같습니다|정리하면\s?다음과|"
     r"확인된\s?정보만|확인된\s?프로필|결론적으로|요약하자면|이\s?글에서는"
 )
-_BANNED_TITLE = re.compile(r"완벽\s?가이드|대방출|꿀팁|한눈에\s?보기|알아봅시다|[★▶♥]|\[속보\]")
+_BANNED_TITLE = re.compile(r"완벽\s?가이드|완벽\s?정리|총정리|대방출|꿀팁|한눈에\s?보기|알아봅시다|[★▶♥]|\[속보\]")
 _MAP_LINE_RE = re.compile(r"^\s*\[(네이버\s*지도|지도\s*연동용|사진\s*출처).*\]\s*$", re.IGNORECASE)
 _IMG_PH_RE = re.compile(r"^\s*\[이미지\s*:\s*(.*?)\]\s*$")
 
@@ -1650,6 +1682,7 @@ def _repeated_title_word(title: str) -> str | None:
 
 _SAFE_REPLACE = (
     ("한눈에 보기", "쉽게 보기"), ("완벽 가이드", "가이드"), ("완벽가이드", "가이드"), ("총정리", "정리"),
+    ("완벽 정리", "정리"), ("완벽정리", "정리"),
     ("대방출", "공개"), ("꿀팁", "팁"), ("필독", "참고"), ("알아보겠습니다", "짚어볼게요"),
     ("살펴보겠습니다", "짚어볼게요"), ("소개합니다", "안내해요"), ("결론적으로", "정리해 보면"),
     ("요약하자면", "한 줄로 말하면"), ("이 글에서는", "여기서는"),

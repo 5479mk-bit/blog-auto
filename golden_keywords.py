@@ -387,8 +387,8 @@ def blog_docs(kws: list[str], ttl_days: int = 3) -> dict[str, int | None]:
 def golden_exp(volume: int, docs: int | None, preempt: bool = False) -> float:
     """예상 일 유입 = 월 검색량 × (문서 포화도로 추정한 상위 노출 클릭률) ÷ 30.
     포화도 = 블로그 문서 수 ÷ 월 검색량. 문서가 검색량보다 적은 키워드는 신생 블로그도 1페이지가 가능하다."""
-    if docs is None:  # 문서 수 조회 실패 — 예전처럼 보수적으로
-        ctr = 0.03
+    if docs is None:  # 문서 수 조회 실패 — 확인된 좋은 키워드보다 앞서지 않게 보수적으로
+        ctr = 0.015
     else:
         sat = docs / max(volume, 1)
         ctr = 0.15 if sat < 0.3 else 0.10 if sat < 1 else 0.06 if sat < 3 else 0.03 if sat < 8 else 0.012 if sat < 20 else 0.003
@@ -422,11 +422,13 @@ def refine_keyword(head: str, volume: int, related: list[dict] | None, preempt: 
     exclude_kw = exclude_kw or set()
     head_toks = [_norm(t) for t in head.split() if len(t) >= 2] or [_norm(head)]
     pool = [{"kw": head, "total": volume}]
+    seen = {_norm(head)}
     for r in related or []:
         kw, tot = str(r.get("kw", "")), int(r.get("total") or 0)
         nk = _norm(kw)
-        if tot < 200 or nk == _norm(head) or nk in exclude_kw or not all(t in nk for t in head_toks[:2]):
+        if tot < 200 or nk in seen or nk in exclude_kw or not all(t in nk for t in head_toks[:2]):
             continue
+        seen.add(nk)
         pool.append({"kw": _join_head(kw, head), "total": tot, "intent": any(w in kw for w in _INTENT)})
     # 의도어가 붙은 롱테일 우선 + 검색량 순으로 상위 몇 개만 문서 수를 조회(API 절약)
     pool = pool[:1] + sorted(pool[1:], key=lambda r: (not r.get("intent"), -r["total"]))[:max_check - 1]
@@ -537,6 +539,7 @@ def pick_season(exclude_kw: set[str] | None = None, exclude_tokens: set[str] | N
     cands.sort(key=lambda c: -c["exp"])
     for c in cands[:5]:
         _log(f"시즌 후보 {c['keyword']!r} 월 {c['volume']:,} 경쟁 {c['comp']} 피크까지 {c['days_left']}일 예상 일유입 {c['exp']}")
+    cands[0]["alts"] = cands[1:5]  # 2026-10-27: 황금지수 재채점용 차순위 후보
     return cands[0]
 
 
@@ -731,7 +734,7 @@ def pick_hot(extra_names: list[str] | None = None, exclude_norm: set[str] | None
     pool.sort(key=lambda t: -t[0])
     top = pool[:top_for_trend]
     spikes = _datalab_spikes([t[1] for t in top])
-    best = None
+    best, rows = None, []
     for total, nm, evs, info, why, brand in top:
         sp = spikes.get(nm)
         preempt = brand > 0 or int(info.get("total", 0)) < MIN_DEMAND  # 아직 행사명 검색이 안 쌓인 신규 = 선점
@@ -739,15 +742,87 @@ def pick_hot(extra_names: list[str] | None = None, exclude_norm: set[str] | None
         score = exp * (1 + 0.3 * min(max((sp["spike"] if sp else 1.0) - 1, 0), 3))
         _log(f"핫 후보 {nm!r} [{why}] 월 {total:,}회 / 급상승률 "
              + (f"x{sp['spike']} (최근2일 {sp['recent']} / 이전5일 {sp['prev']})" if sp else "-"))
-        if best is None or score > best["score"] or (score == best["score"] and total > best["volume"]):
-            best = {"keyword": nm, "volume": total, "comp": info.get("comp", ""), "score": score, "exp": round(score, 1), "brand_volume": brand,
+        row = {"keyword": nm, "volume": total, "comp": info.get("comp", ""), "score": score, "exp": round(score, 1), "brand_volume": brand,
                     "spike": sp["spike"] if sp else None, "level": sp["recent"] if sp else None, "why": why,
                     "events": densest_cluster(evs, limit=6) if evs else [],
                     "related": [{"kw": r["kw"], "total": r["total"]} for r in info.get("related", [])
                                 if _norm(nm.split()[0]) in _norm(r["kw"]) and _norm(r["kw"]) != _norm(nm)][:8]}
+        rows.append(row)
+        if best is None or score > best["score"] or (score == best["score"] and total > best["volume"]):
+            best = row
+    if best:
+        best["alts"] = [r for r in sorted(rows, key=lambda r: -r["score"]) if r is not best][:4]
     if best and best["spike"] is None:
         _log("데이터랩 급상승률을 얻지 못해 월 검색량 기준으로 선택")
     return best
+
+
+# ── 상시(에버그린)·월간 황금 키워드 — 2026-10-27 신설 ─────────────────────────────
+# 행사·팝업 글은 행사가 끝나면 유입이 0이 된다. 일 방문자 1천은 '매일 조금씩 꾸준히 들어오는 글'이 쌓여야 나온다.
+# 그래서 블로그 니치(수도권 데이트·핫플·가볼만한곳·전시·팝업)의 상시/월간 시드를 연관검색어로 넓히고,
+# 문서 수 대비 검색량이 좋은 롱테일만 골라 쓴다. 같은 키워드는 60일 안에 다시 쓰지 않는다(자기잠식 방지).
+EVERGREEN_SEEDS = [
+    "서울 데이트 코스", "서울 실내 데이트", "비오는날 데이트", "서울 야경 명소", "서울 가볼만한곳", "서울 이색 데이트",
+    "서울 근교 데이트", "서울 근교 가볼만한곳", "경기도 가볼만한곳", "인천 가볼만한곳", "서울 전시회", "서울 무료 전시",
+    "서울 팝업스토어", "주말 갈만한곳", "성수 데이트", "홍대 데이트", "연남동 데이트", "잠실 데이트", "한남동 데이트",
+    "을지로 데이트", "익선동 데이트", "용산 데이트", "여의도 데이트", "강남 데이트", "북촌 데이트", "서촌 데이트",
+    "망원동 데이트", "문래동 데이트", "남산 데이트", "합정 데이트", "신촌 데이트", "건대 데이트", "삼청동 데이트",
+    "서울 산책 코스", "한강 데이트", "서울 드라이브 코스", "서울 아이랑 가볼만한곳",
+]
+EVERGREEN_COOLDOWN_DAYS = 60
+SEEDS_PER_RUN = 10  # 검색광고 API 호출 절약: 실행마다 시드를 돌려가며 일부만 본다(키워드 검색량은 7일 캐시)
+
+
+def _monthly_seeds(today: date) -> list[str]:
+    months = [today.month] + ([today.month % 12 + 1] if today.day >= 18 else [])  # 월말엔 다음 달 키워드 선점
+    out = []
+    for m in months:
+        out += [f"{m}월 데이트", f"{m}월 서울 가볼만한곳", f"{m}월 가볼만한곳", f"{m}월 데이트 코스"]
+    return out
+
+
+def pick_evergreen(exclude_recent: set[str] | None = None, exclude_tokens: set[str] | None = None, top_check: int = 12) -> dict | None:
+    """상시·월간 시드의 연관 롱테일 중 황금지수(golden_exp) 최상위 1개(+차순위 alts).
+    exclude_recent: 최근 60일 안에 쓴 키워드(_norm). 포함관계(서울 실내 데이트 ⊂ 서울 실내 데이트 코스)도 같은 글로 본다."""
+    exclude_recent = exclude_recent or set()
+    exclude_tokens = exclude_tokens or set()
+    today = date.today()
+    seeds = _monthly_seeds(today)
+    k = (today.toordinal() * 4 + datetime.now().hour // 6) % len(EVERGREEN_SEEDS)  # 실행마다 다른 시드 묶음
+    seeds += (EVERGREEN_SEEDS[k:] + EVERGREEN_SEEDS[:k])[:SEEDS_PER_RUN]
+    pool: dict[str, dict] = {}
+    for seed in seeds:
+        info = cached_volume(seed)
+        if not info:
+            continue
+        head = [_norm(t) for t in seed.split() if len(t) >= 2]
+        rows = list(info.get("related", [])) + ([{"kw": seed, "total": info["total"], "comp": info.get("comp", "")}] if info.get("total") else [])
+        for r in rows:
+            kw, vol = str(r.get("kw", "")), int(r.get("total") or 0)
+            nk = _norm(kw)
+            if not (800 <= vol <= 40000) or nk in pool:
+                continue
+            if sum(1 for h in head if h in nk) < max(1, len(head) - 1):  # 시드 의미를 유지한 연관어만
+                continue
+            if any(nk in u or u in nk for u in exclude_recent) or _has_token(kw, exclude_tokens):
+                continue
+            pool[nk] = {"keyword": _respace(kw, seed), "volume": vol, "comp": r.get("comp", ""), "seed": seed,
+                        "related": [{"kw": x["kw"], "total": x["total"]} for x in info.get("related", [])
+                                    if _norm(x["kw"]) != nk and any(h in _norm(x["kw"]) for h in head)][:12]}
+    if not pool:
+        _log("상시 후보 없음")
+        return None
+    # 문서 수 조회는 비싸니 검색량 상위만(광고 경쟁 '높음'은 상업 키워드가 많아 뒤로)
+    short = sorted(pool.values(), key=lambda c: (c["comp"] == "높음", -c["volume"]))[:top_check]
+    docs = blog_docs([c["keyword"] for c in short])
+    for c in short:
+        c["docs"] = docs.get(c["keyword"])
+        c["exp"] = golden_exp(c["volume"], c["docs"])
+        c["events"] = []
+        _log(f"상시 후보 {c['keyword']!r} 월 {c['volume']:,} 문서 {c['docs'] if c['docs'] is not None else '?'} → 일 {c['exp']} (시드 {c['seed']})")
+    short.sort(key=lambda c: -c["exp"])
+    short[0]["alts"] = short[1:5]
+    return short[0]
 
 
 # ── 전국 축제 (한국관광공사 TourAPI KorService2 searchFestival2) — 2026-10-21 신설 ──────────────
@@ -835,6 +910,7 @@ def pick_festival(exclude_kw: set[str] | None = None, exclude_tokens: set[str] |
     cands.sort(key=lambda c: -c["exp"])
     for c in cands[:5]:
         _log(f"축제 후보 {c['keyword']!r} 월 {c['volume']:,} 경쟁 {c['comp']} 개막까지 {c['days_to_start']}일 예상 일유입 {c['exp']}")
+    cands[0]["alts"] = cands[1:5]  # 2026-10-27: 황금지수 재채점용 차순위 후보
     return cands[0]
 
 
@@ -885,6 +961,7 @@ def pick_kpop(events: list[dict], exclude_kw: set[str] | None = None) -> dict | 
     cands.sort(key=lambda c: -c["exp"])
     for c in cands[:5]:
         _log(f"K팝 후보 {c['keyword']!r} 유효 월 {c['volume']:,} (아티스트 {c['artist_volume']:,}) 예상 일유입 {c['exp']}")
+    cands[0]["alts"] = cands[1:5]  # 2026-10-27: 황금지수 재채점용 차순위 후보
     return cands[0]
 
 
