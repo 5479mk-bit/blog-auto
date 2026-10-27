@@ -14,6 +14,8 @@ import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from rank_feedback import topic_engine
+
 BASE = Path(__file__).parent
 BLOG_ID = "livinglegeno"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36"
@@ -37,7 +39,7 @@ def recent_keywords(days: int) -> list[dict]:
         if kw in seen:
             continue
         seen.add(kw)
-        engine = "hot" if "[핫]" in l else "season" if "[시즌]" in l else "golden" if "[황금]" in l else "manual"
+        engine = topic_engine(l)
         vol = re.search(r"월(?: 검색량)? ([\d,]+)회", l)
         out.append({"keyword": kw, "engine": engine, "volume": int(vol.group(1).replace(",", "")) if vol else None,
                     "posted": t.group(1)})
