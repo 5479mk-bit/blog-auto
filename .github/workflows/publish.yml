@@ -45,14 +45,26 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: 할 일 확인(설치 전 — Actions 사용 시간 절약)
+        id: gate
+        env:
+          MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || (github.event.schedule == '37 2,4,6,9,11,13 * * *' && 'guard' || 'slot') }}
+          DRY: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+        run: |
+          if [ "$DRY" = "true" ]; then echo "run=true" >> "$GITHUB_OUTPUT"; echo "드라이런 — 항상 실행"; exit 0; fi
+          python catchup_guard.py --precheck "$MODE"
+
       - uses: actions/setup-node@v4
+        if: steps.gate.outputs.run == 'true'
         with:
           node-version: "20"
 
       - name: Claude Code CLI (구독 토큰 사용)
+        if: steps.gate.outputs.run == 'true'
         run: npm install -g @anthropic-ai/claude-code && claude --version
 
       - name: 시스템 패키지(가상 화면·한글 폰트)
+        if: steps.gate.outputs.run == 'true'
         # 2026-10-27: apt 미러가 멈춰 40분 넘게 걸린 적이 있다(concurrency 때문에 다음 슬롯까지 막힘) → 시도마다 시간 제한 + 재시도
         timeout-minutes: 15
         run: |
@@ -63,6 +75,7 @@ jobs:
           exit 1
 
       - name: Python 환경
+        if: steps.gate.outputs.run == 'true'
         timeout-minutes: 20
         run: |
           python -m venv .venv
@@ -72,6 +85,7 @@ jobs:
           keyt/.venv/bin/pip install -q -r keyt/requirements.txt
 
       - name: 키 파일 생성(Secrets → 파일, 커밋 안 됨)
+        if: steps.gate.outputs.run == 'true'
         env:
           API_KEYS_ENV: ${{ secrets.API_KEYS_ENV }}
           KEYT_ENV: ${{ secrets.KEYT_ENV }}
@@ -81,12 +95,14 @@ jobs:
           mkdir -p logs
 
       - name: 로그인 쿠키 복원
+        if: steps.gate.outputs.run == 'true'
         env:
           NAVER_COOKIES: ${{ secrets.NAVER_COOKIES }}
           TISTORY_COOKIES: ${{ secrets.TISTORY_COOKIES }}
         run: .venv/bin/python session_cookies.py restore
 
       - name: 티스토리 데몬 시작
+        if: steps.gate.outputs.run == 'true'
         run: |
           nohup xvfb-run -a .venv/bin/python -u tistory_daemon.py > logs/tistory_daemon.log 2>&1 &
           for i in $(seq 1 36); do
@@ -96,6 +112,7 @@ jobs:
           curl -fs http://127.0.0.1:8765/health || { echo "::warning::티스토리 로그인 실패 — 쿠키 갱신 필요(이번엔 네이버만 발행)"; tail -20 logs/tistory_daemon.log; }
 
       - name: 발행 실행
+        if: steps.gate.outputs.run == 'true'
         env:
           DRY: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
           MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || (github.event.schedule == '37 2,4,6,9,11,13 * * *' && 'guard' || 'slot') }}
@@ -109,7 +126,7 @@ jobs:
           tail -60 logs/run_daily_post.log || true
 
       - name: 갱신된 로그인 쿠키를 Secret에 다시 저장(만료 방지)
-        if: always()
+        if: (always()) && steps.gate.outputs.run == 'true'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -128,14 +145,14 @@ jobs:
           rm -f tistory.b64 naver.b64
 
       - name: 네이버 순위 점검(하루 1번, 21시 이후 — 키워드 전략 피드백용)
-        if: always() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        if: (always() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)) && steps.gate.outputs.run == 'true'
         continue-on-error: true
         run: |
           f="outputs/rank/rank_$(date +%Y%m%d).json"
           if [ "$(date +%H)" -ge 21 ] && [ ! -f "$f" ]; then timeout 600 .venv/bin/python rank_check.py 14 || true; fi
 
       - name: 상태 저장(발행 이력·중복 방지)
-        if: always() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        if: (always() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)) && steps.gate.outputs.run == 'true'
         run: |
           git config user.name "blog-bot"
           git config user.email "blog-bot@users.noreply.github.com"
@@ -146,7 +163,7 @@ jobs:
           fi
 
       - name: 로그 보관
-        if: always()
+        if: (always()) && steps.gate.outputs.run == 'true'
         continue-on-error: true   # 계정 아티팩트 저장 한도에 걸려도 실행 자체는 성공 처리
         uses: actions/upload-artifact@v4
         with:

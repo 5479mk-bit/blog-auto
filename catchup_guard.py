@@ -55,6 +55,28 @@ def expected_by_now(now: datetime) -> int:
     )
 
 
+def precheck(mode: str) -> tuple[bool, str]:
+    """2026-10-27: 워크플로가 크롬·파이썬 패키지를 설치하기 전에(실행마다 4~5분) 할 일이 있는지만 먼저 본다.
+    Actions 사용 시간이 바닥나 실행이 시작도 못 한 일이 있었다 — 할 일 없는 보충·새벽 실행은 설치 없이 끝낸다.
+    표준 라이브러리만 쓴다(설치 전 단계에서 돈다)."""
+    now = datetime.now()
+    state = run_state.load()
+    if mode != "guard":
+        if now.hour < 9:
+            return False, "새벽 슬롯은 쉰다"
+        if state["successes"] >= DAILY_TARGET:
+            return False, f"오늘 {DAILY_TARGET}편 완료"
+        return True, "정규 슬롯"
+    if state["successes"] >= DAILY_TARGET or state["attempts"] >= MAX_ATTEMPTS_PER_DAY:
+        return False, "오늘 목표 달성 또는 시도 한도"
+    if state["successes"] >= expected_by_now(now):
+        return False, "일정대로 진행 중"
+    last = run_state.last_attempt_at()
+    if last is not None and now - last < timedelta(hours=CATCHUP_GAP_HOURS):
+        return False, f"직전 실행 후 {CATCHUP_GAP_HOURS}시간 대기 중"
+    return True, "밀린 슬롯 보충"
+
+
 def main() -> int:
     now = datetime.now()
     state = run_state.load()
@@ -93,4 +115,12 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if len(sys.argv) >= 3 and sys.argv[1] == "--precheck":
+        ok, why = precheck(sys.argv[2])
+        print(f"[precheck] {'실행' if ok else '건너뜀'} — {why}")
+        import os
+        if os.environ.get("GITHUB_OUTPUT"):
+            with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+                f.write(f"run={'true' if ok else 'false'}\n")
+        sys.exit(0)
     sys.exit(main())
