@@ -46,9 +46,32 @@ def recent_keywords(days: int) -> list[dict]:
     return out
 
 
+_PAGE = {}
+
+
+def _fetch_html(url: str) -> str:
+    """단순 요청은 Actions에서 HTTPError로 막힌다(2026-10-27 실측) → 실패하면 실제 크롬(Playwright)으로 연다."""
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept-Language": "ko-KR,ko;q=0.9",
+                                                   "Accept": "text/html,application/xhtml+xml", "Referer": "https://www.naver.com/"})
+        return urllib.request.urlopen(req, timeout=15).read().decode("utf-8", "replace")
+    except Exception:
+        if "page" not in _PAGE:
+            import os
+            from playwright.sync_api import sync_playwright
+            pw = sync_playwright().start()
+            ch = os.environ.get("CHROME_CHANNEL", "")
+            browser = pw.chromium.launch(headless=True, **({"channel": ch} if ch else {}))
+            _PAGE["page"] = browser.new_page(user_agent=UA, locale="ko-KR")
+        page = _PAGE["page"]
+        page.goto(url, timeout=25000, wait_until="domcontentloaded")
+        page.wait_for_timeout(1500)
+        return page.content()
+
+
 def blog_rank(query: str) -> tuple[int | None, int]:
     url = "https://search.naver.com/search.naver?ssc=tab.blog.all&query=" + urllib.parse.quote(query)
-    html = urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": UA}), timeout=15).read().decode("utf-8", "replace")
+    html = _fetch_html(url)
     ids: list[str] = []
     for i in re.findall(r"blog\.naver\.com/([A-Za-z0-9_-]+)/\d+", html):
         if i not in ids:
@@ -71,8 +94,9 @@ def main() -> int:
         print(f"[rank] {r['posted']} [{r['engine']}] {r['keyword']} (월 {r['volume'] or '-'}) → {rk}", flush=True)
     out_dir = BASE / "outputs" / "rank"  # 2026-10-27: Actions에서 커밋해 추이를 남긴다(logs/는 아티팩트 한도에 막힘)
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / f"rank_{datetime.now():%Y%m%d}.json").write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")
     ok = [r for r in rows if not r.get("error")]
+    if ok:  # 전부 측정 실패면 파일을 남기지 않는다(워크플로가 '오늘 이미 측정함'으로 오인하지 않게)
+        (out_dir / f"rank_{datetime.now():%Y%m%d}.json").write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")
     top = [r for r in ok if r.get("rank") and r["rank"] <= 5]
     print(f"[rank] 요약: 측정 {len(ok)}/{len(rows)}개 중 5위 안 {len(top)}개, 30위 안 {sum(1 for r in ok if r.get('rank'))}개", flush=True)
     return 0
