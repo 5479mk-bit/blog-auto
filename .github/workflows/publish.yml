@@ -156,7 +156,7 @@ jobs:
         run: |
           git config user.name "blog-bot"
           git config user.email "blog-bot@users.noreply.github.com"
-          git add topics.md used_state.json run_state.json spike_state.json outputs/cache/kw_volumes.json outputs/cache/blog_docs.json outputs/rank 2>/dev/null || true
+          git add topics.md used_state.json run_state.json spike_state.json outputs/cache/kw_volumes.json outputs/cache/blog_docs.json outputs/cache/llm_cands.json outputs/rank 2>/dev/null || true
           if ! git diff --cached --quiet; then
             git commit -q -m "state: $(date '+%Y-%m-%d %H:%M') 실행 결과"
             for i in 1 2 3; do git pull -q --rebase && git push -q && break; sleep 5; done

@@ -358,6 +358,9 @@ def expected_traffic(volume: int, comp: str, preempt: bool = False) -> float:
 _DOCS_CACHE = CACHE / "blog_docs.json"
 
 
+_docs_err_logged = {"v": False}
+
+
 def blog_docs(kws: list[str], ttl_days: int = 3) -> dict[str, int | None]:
     """키워드별 네이버 블로그 문서 수. 3일 캐시, 실패는 None."""
     CACHE.mkdir(parents=True, exist_ok=True)
@@ -369,12 +372,16 @@ def blog_docs(kws: list[str], ttl_days: int = 3) -> dict[str, int | None]:
     out = {k: cache[k]["n"] for k in kws if k in cache and now - cache[k]["ts"] < ttl_days * 86400}
     need = [k for k in kws if k not in out]
     if need and KEYT_PY.exists():
+        load_api_keys()  # keyt/.env에 키가 없을 때를 대비해 api_keys.env의 NAVER_CLIENT_ID/SECRET을 환경변수로 넘긴다
         try:
             p = subprocess.run([str(KEYT_PY), str(KEYT_DIR / "blog_total.py"), *need], cwd=str(KEYT_DIR),
                                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
             got = json.loads(p.stdout.strip() or "{}")
         except Exception:
             got = {}
+        if got.get("_error") and not _docs_err_logged["v"]:
+            _log(f"블로그 문서 수 조회 실패: {got['_error']} — 네이버 API HUB에서 '검색(블로그)' 상품이 이 키에 연결돼 있는지 확인 필요")
+            _docs_err_logged["v"] = True
         for k in need:
             n = got.get(k)
             out[k] = n
@@ -387,7 +394,9 @@ def blog_docs(kws: list[str], ttl_days: int = 3) -> dict[str, int | None]:
 def golden_exp(volume: int, docs: int | None, preempt: bool = False) -> float:
     """예상 일 유입 = 월 검색량 × (문서 포화도로 추정한 상위 노출 클릭률) ÷ 30.
     포화도 = 블로그 문서 수 ÷ 월 검색량. 문서가 검색량보다 적은 키워드는 신생 블로그도 1페이지가 가능하다."""
-    if docs is None:  # 문서 수 조회 실패 — 확인된 좋은 키워드보다 앞서지 않게 보수적으로
+    if docs is None:  # 문서 수 조회 실패 — 확인된 좋은 키워드보다 앞서지 않게 보수적으로.
+        # 2026-10-27 실측: 문서 수를 모르니 '가을 단풍 명소'(월 7.3만) 같은 초대형 헤드를 골랐다 → 검색량 효과를 1.5만에서 자른다
+        volume = min(volume, 15000)
         ctr = 0.015
     else:
         sat = docs / max(volume, 1)
