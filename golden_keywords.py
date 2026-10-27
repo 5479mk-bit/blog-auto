@@ -350,6 +350,101 @@ def expected_traffic(volume: int, comp: str, preempt: bool = False) -> float:
     return round(volume * ctr / 30, 1)
 
 
+# ── 황금 지수(검색량 ÷ 블로그 문서 수) — 2026-10-27 리밸런싱 ─────────────
+# 문제: 위 comp는 검색광고 '입찰' 경쟁도라 블로그 노출 경쟁과 무관하다. 그래서 문서가 수만 개 쌓인 헤드 키워드
+# (청송사과축제·넷플잔치 월 3~8만)를 "경쟁 낮음/선점 → 15%"로 과대평가해 계속 골랐고, 한 편도 상위 노출이 안 됐다.
+# 이제 엔진이 고른 주제마다 '주제명 + 세부어'(주차·셔틀·시간표·예약 …) 롱테일 후보의 블로그 문서 수를 실제로 조회해
+# 문서 대비 검색량이 가장 좋은(= 실제로 1페이지에 들어갈 수 있는) 키워드를 제목 키워드로 쓴다.
+_DOCS_CACHE = CACHE / "blog_docs.json"
+
+
+def blog_docs(kws: list[str], ttl_days: int = 3) -> dict[str, int | None]:
+    """키워드별 네이버 블로그 문서 수. 3일 캐시, 실패는 None."""
+    CACHE.mkdir(parents=True, exist_ok=True)
+    try:
+        cache = json.loads(_DOCS_CACHE.read_text(encoding="utf-8"))
+    except Exception:
+        cache = {}
+    now = datetime.now().timestamp()
+    out = {k: cache[k]["n"] for k in kws if k in cache and now - cache[k]["ts"] < ttl_days * 86400}
+    need = [k for k in kws if k not in out]
+    if need and KEYT_PY.exists():
+        try:
+            p = subprocess.run([str(KEYT_PY), str(KEYT_DIR / "blog_total.py"), *need], cwd=str(KEYT_DIR),
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+            got = json.loads(p.stdout.strip() or "{}")
+        except Exception:
+            got = {}
+        for k in need:
+            n = got.get(k)
+            out[k] = n
+            if isinstance(n, int):
+                cache[k] = {"n": n, "ts": now}
+        _DOCS_CACHE.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+    return {k: out.get(k) for k in kws}
+
+
+def golden_exp(volume: int, docs: int | None, preempt: bool = False) -> float:
+    """예상 일 유입 = 월 검색량 × (문서 포화도로 추정한 상위 노출 클릭률) ÷ 30.
+    포화도 = 블로그 문서 수 ÷ 월 검색량. 문서가 검색량보다 적은 키워드는 신생 블로그도 1페이지가 가능하다."""
+    if docs is None:  # 문서 수 조회 실패 — 예전처럼 보수적으로
+        ctr = 0.03
+    else:
+        sat = docs / max(volume, 1)
+        ctr = 0.15 if sat < 0.3 else 0.10 if sat < 1 else 0.06 if sat < 3 else 0.03 if sat < 8 else 0.012 if sat < 20 else 0.003
+        # 비율이 좋아도 문서가 절대적으로 많으면 상위 블로그(다이아·인플루언서)가 1페이지를 다 차지한다
+        ctr = min(ctr, 0.004 if docs > 30000 else 0.02 if docs > 10000 else 0.06 if docs > 3000 else 0.15)
+    if preempt:  # 행사 시작 전·피크 전: 경쟁 글이 아직 덜 쌓였다
+        ctr = min(0.15, ctr * 1.4)
+    return round(volume * ctr / 30, 1)
+
+
+_INTENT = ("주차", "셔틀", "시간표", "라인업", "예약", "예매", "입장료", "가격", "위치", "웨이팅", "굿즈", "일정", "기간", "티켓",
+           "가는법", "운영시간", "코스", "후기", "준비물", "날씨", "맛집", "숙소", "불꽃", "야간", "할인", "시간", "포토존")
+MAX_SATURATION = 25  # 문서 수가 검색량의 25배를 넘는 키워드는 신생 블로그로는 사실상 노출 불가 → 후보 탈락
+
+
+def _join_head(kw: str, head: str) -> str:
+    """검색광고가 주는 '청송사과축제주차'를 헤드 표기 그대로 살려 '청송사과축제 주차'로 띄운다."""
+    if " " in kw:
+        return kw
+    nh = _norm(head)
+    if _norm(kw).startswith(nh) and kw.startswith(head.replace(" ", "")):
+        rest = kw[len(head.replace(" ", "")):]
+        return f"{head} {_respace(rest, rest)}".strip() if rest else head
+    return _respace(kw, head)
+
+
+def refine_keyword(head: str, volume: int, related: list[dict] | None, preempt: bool = False,
+                   exclude_kw: set[str] | None = None, max_check: int = 8) -> dict:
+    """주제 헤드 키워드와 그 연관 롱테일 중 황금 지수 기준 최적의 '제목 키워드'를 고른다.
+    반환: {title_kw, volume, docs, sat, exp, head_docs}. 롱테일은 반드시 헤드의 핵심 토큰을 포함해야 한다."""
+    exclude_kw = exclude_kw or set()
+    head_toks = [_norm(t) for t in head.split() if len(t) >= 2] or [_norm(head)]
+    pool = [{"kw": head, "total": volume}]
+    for r in related or []:
+        kw, tot = str(r.get("kw", "")), int(r.get("total") or 0)
+        nk = _norm(kw)
+        if tot < 200 or nk == _norm(head) or nk in exclude_kw or not all(t in nk for t in head_toks[:2]):
+            continue
+        pool.append({"kw": _join_head(kw, head), "total": tot, "intent": any(w in kw for w in _INTENT)})
+    # 의도어가 붙은 롱테일 우선 + 검색량 순으로 상위 몇 개만 문서 수를 조회(API 절약)
+    pool = pool[:1] + sorted(pool[1:], key=lambda r: (not r.get("intent"), -r["total"]))[:max_check - 1]
+    docs = blog_docs([p["kw"] for p in pool])
+    best = None
+    head_exp = golden_exp(volume, docs.get(head), preempt)
+    for i, p in enumerate(pool):
+        d = docs.get(p["kw"])
+        # 롱테일 제목에도 헤드가 통째로 들어가므로 헤드 유입 일부(30%)를 덤으로 얹는다
+        exp = round(golden_exp(p["total"], d, preempt) + (0.3 * head_exp if i else 0), 1)
+        row = {"title_kw": p["kw"], "volume": p["total"], "docs": d, "sat": round(d / max(p["total"], 1), 2) if d is not None else None, "exp": exp}
+        _log(f"  황금지수 {p['kw']!r}: 월 {p['total']:,} / 문서 {d if d is not None else '?'} → 일 {exp}")
+        if best is None or exp > best["exp"]:
+            best = row
+    best["head_docs"] = docs.get(head)
+    return best
+
+
 def _longtail_swap(seed: str, info: dict, exclude_kw: set[str], lo: int = 500, hi: int = 30000) -> dict | None:
     """경쟁 '높음' 메가 키워드 대신 같은 주제의 롱테일(검색량 lo~hi, 경쟁 낮음/중간) 중 예상 유입 최대인 것."""
     head = [t for t in seed.split() if len(t) >= 2]

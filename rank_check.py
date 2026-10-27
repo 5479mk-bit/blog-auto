@@ -18,6 +18,7 @@ BASE = Path(__file__).parent
 BLOG_ID = "livinglegeno"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36"
 _KW_RE = re.compile(r"'([^']{2,40})'\(월")
+_TITLE_KW_RE = re.compile(r"제목키워드 「([^」]{2,40})」")  # 2026-10-27~: 황금지수로 고른 실제 제목 키워드
 _TIME_RE = re.compile(r"\(발굴: (\d{4}-\d\d-\d\d \d\d:\d\d)\)")
 
 
@@ -31,7 +32,8 @@ def recent_keywords(days: int) -> list[dict]:
         m, t = _KW_RE.search(l), _TIME_RE.search(l)
         if not m or not t or datetime.strptime(t.group(1), "%Y-%m-%d %H:%M") < cutoff:
             continue
-        kw = m.group(1)
+        tk = _TITLE_KW_RE.search(l)
+        kw = tk.group(1) if tk else m.group(1)
         if kw in seen:
             continue
         seen.add(kw)
@@ -63,12 +65,14 @@ def main() -> int:
         except Exception as e:
             r["rank"], r["error"] = None, type(e).__name__
         time.sleep(1.5)
-        rk = f"{r['rank']}위" if r.get("rank") else "미노출(상위 30 밖)"
+        rk = f"측정 실패({r['error']})" if r.get("error") else f"{r['rank']}위" if r.get("rank") else "미노출(상위 30 밖)"
         print(f"[rank] {r['posted']} [{r['engine']}] {r['keyword']} (월 {r['volume'] or '-'}) → {rk}", flush=True)
-    (BASE / "logs").mkdir(exist_ok=True)
-    (BASE / "logs" / f"rank_{datetime.now():%Y%m%d}.json").write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")
-    top = [r for r in rows if r.get("rank") and r["rank"] <= 5]
-    print(f"[rank] 요약: {len(rows)}개 중 5위 안 {len(top)}개", flush=True)
+    out_dir = BASE / "outputs" / "rank"  # 2026-10-27: Actions에서 커밋해 추이를 남긴다(logs/는 아티팩트 한도에 막힘)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / f"rank_{datetime.now():%Y%m%d}.json").write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")
+    ok = [r for r in rows if not r.get("error")]
+    top = [r for r in ok if r.get("rank") and r["rank"] <= 5]
+    print(f"[rank] 요약: 측정 {len(ok)}/{len(rows)}개 중 5위 안 {len(top)}개, 30위 안 {sum(1 for r in ok if r.get('rank'))}개", flush=True)
     return 0
 
 

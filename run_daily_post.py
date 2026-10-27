@@ -471,10 +471,29 @@ def _engine_candidates() -> list[tuple[float, str, dict]]:
         if weights.get(kind, 1.0) == 0.0:
             continue
         if g and _norm_place(g["keyword"]) not in exclude_kw:
-            exp = round(float(g.get("exp") or 0) * weights.get(kind, 1.0), 1)
-            print(f"[topic] 엔진 {kind}: {g['keyword']!r} 월 {g.get('volume', 0):,} 경쟁 {g.get('comp') or '-'} → 예상 일유입 {exp}", flush=True)
+            # 2026-10-27 리밸런싱: 광고 경쟁도 기반 추정 대신 블로그 문서 수로 황금 지수를 재계산하고, 헤드보다 노출 가능성이
+            # 높은 롱테일(주제명 + 주차/시간표/예약 …)이 있으면 그걸 제목 키워드로 쓴다.
+            try:
+                from golden_keywords import cached_volume, refine_keyword
+                rel = g.get("related") or (cached_volume(g["keyword"]) or {}).get("related") or []
+                preempt = kind in ("hot", "kpop") or (g.get("days_to_start") or 0) > 0 or (g.get("days_left") or 0) > 0
+                r = refine_keyword(g["keyword"], int(g.get("volume") or 0), rel, preempt, exclude_kw)
+                g.update(title_kw=r["title_kw"], title_volume=r["volume"], docs=r["docs"], sat=r["sat"], head_docs=r["head_docs"])
+                base = r["exp"]
+            except ClaudeSessionLimitError:
+                raise
+            except Exception as e:
+                print(f"[topic] 황금지수 계산 실패({type(e).__name__}) — 기존 추정 사용", file=sys.stderr)
+                base = float(g.get("exp") or 0)
+            exp = round(base * weights.get(kind, 1.0), 1)
+            print(f"[topic] 엔진 {kind}: {g['keyword']!r} → 제목키워드 {g.get('title_kw', g['keyword'])!r} "
+                  f"월 {g.get('title_volume', g.get('volume', 0)):,} 문서 {g.get('docs', '?')} → 예상 일유입 {exp}", flush=True)
             out.append((exp, kind, g))
-    return sorted(out, key=lambda t: -t[0])
+    from golden_keywords import MAX_SATURATION
+    ok = [c for c in out if c[2].get("sat") is None or c[2]["sat"] <= MAX_SATURATION]
+    if out and not ok:
+        print(f"[topic] 모든 후보가 문서 포화(문서/검색량 > {MAX_SATURATION}) — 그중 최선으로 진행", flush=True)
+    return sorted(ok or out, key=lambda t: -t[0])
 
 
 def _best_engine_topic() -> str | None:
@@ -485,11 +504,14 @@ def _best_engine_topic() -> str | None:
     GOLDEN_CTX_FILE.write_text(json.dumps({
         "keyword": g["keyword"], "volume": g.get("volume", 0), "comp": g.get("comp", ""), "related": g.get("related", []),
         "hot": kind == "hot", "season": kind == "season", "spike": g.get("spike"), "exp": exp,
+        "title_kw": g.get("title_kw") or g["keyword"], "title_volume": g.get("title_volume"), "docs": g.get("docs"),
         "events": [_event_brief(e) for e in g.get("events", [])], "festival": g.get("festival"), "kpop": g.get("kpop"),
         "region": g.get("region", ""), "made": datetime.now().isoformat(timespec="minutes")},
         ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"[topic] 채택({kind}): {g['keyword']!r} 예상 일유입 {exp}", flush=True)
-    meta = f"월 검색량 {g.get('volume', 0):,}회, 경쟁 {g.get('comp') or '미확인'}, 예상 일유입 {exp}"
+    meta = (f"월 검색량 {g.get('volume', 0):,}회, 경쟁 {g.get('comp') or '미확인'}, 예상 일유입 {exp}"
+            + (f", 제목키워드 「{g['title_kw']}」 월 {g.get('title_volume') or 0:,}·문서 {g.get('docs') if g.get('docs') is not None else '?'}"
+               if g.get("title_kw") else ""))
     if kind == "kpop":
         ev = g.get("kpop") or {}
         return (f"{g['keyword']} [KPOP] [황금] — K팝 팬덤 행사 '{g['keyword']}'({meta}; 아티스트 {', '.join(ev.get('artists', [])[:6])}; "
@@ -775,6 +797,7 @@ def _run_event_research(topic: str, cat: str, today: str) -> dict:
                     data["region"] = reg
                 if ctx:
                     data["golden_keyword"] = ctx["keyword"]
+                    data["title_keyword"] = ctx.get("title_kw") or ctx["keyword"]
                     data["seo_keywords"] = ctx.get("related", [])
                     data["golden_volume"] = ctx.get("volume")
                     fe = ctx.get("festival") or {}
@@ -849,6 +872,7 @@ def run_research(topic: str) -> dict:
                 data["topic_category"] = "DATE_COURSE"
                 if golden_ctx:  # SEO: 황금 키워드와 연관 키워드(월 검색량 포함)를 글쓰기/태그 단계로 전달
                     data["golden_keyword"] = golden_ctx["keyword"]
+                    data["title_keyword"] = golden_ctx.get("title_kw") or golden_ctx["keyword"]
                     data["seo_keywords"] = golden_ctx.get("related", [])
                     data["golden_volume"] = golden_ctx.get("volume")
                     data["hot"] = bool(golden_ctx.get("hot"))
@@ -1238,19 +1262,20 @@ def _question_turn() -> bool:
 
 
 def _event_title_rule(research: dict) -> str:
-    kw = research.get("golden_keyword") or research.get("target_keyword") or ""
+    kw = research.get("title_keyword") or research.get("golden_keyword") or research.get("target_keyword") or ""
     if research.get("title_style") == "question":
         return (f"★ 이번 제목은 **질문/궁금증형**(2026-10-26 검색 최적화). ① '{kw}'(검색 키워드)를 반드시 제목 맨 앞에 연속된 단어로 둘 것. "
                 "② 넋두리나 추상적 질문 금지. 독자가 검색창에 칠 실질적 궁금증(주차 피하는 법, 가장 붐비는 시간 피하는 법, 예매 성공 팁 등)과 직결되게 작성. "
                 "③ '총정리', '완벽가이드' 같은 스팸 감점 단어는 제외하고 '핵심 안내', '방문 꿀팁', '상세 가이드'로 결합. "
                 f"예: '{kw} 주차 명당과 셔틀버스 팁! 차 끌고 가기 전 필독 방문 가이드', "
                 f"'{kw} 라인업·시간표 언제 가야 가장 좋을까? (일정·주차 상세 안내)'.")
+    # 2026-10-27 리밸런싱: 세부어 3~4개 나열형(키워드 도배)은 네이버에서 오히려 감점 → '검색어 그대로 + 세부 1~2개 + 자연스러운 꼬리'.
     if research.get("topic_category") == "KPOP":
-        return (f"'{kw}'를 맨 앞에(연도 포함 가능) + 팬들이 지금 찾는 것 3~4개(라인업·티켓팅·예매·좌석·시야·일정) + '상세 안내'. "
-                f"예: '2026 {kw} 라인업 티켓팅 예매 좌석 시야 상세 안내'. 앞에 '라인업 공개!' 같은 짧은 훅을 붙여도 좋다.")
-    region = research.get("region") or ""
-    return (f"'2026 {kw} 일정·가수 라인업·주차 정보 핵심 안내 (ft. {region} 가볼만한곳)' 공식. 세부 단어는 데이터에 있는 것(셔틀·먹거리·입장료·시간표)으로 바꿔도 된다. "
-            "(스팸 필터 회피를 위해 '총정리' 대신 '핵심 안내', '방문 가이드' 권장).")
+        return (f"'{kw}'를 띄어쓰기까지 그대로 맨 앞에 두고, 팬들이 지금 찾는 것 1~2개(키워드에 이미 있는 단어는 반복 금지) + 짧은 꼬리. 25~35자. "
+                f"예: '{kw} 티켓팅 일정과 좌석 시야 정리'.")
+    return (f"'{kw}'를 띄어쓰기까지 그대로 맨 앞에 두고, 데이터에 있는 세부 1~2개(셔틀·먹거리·입장료·시간표 중, 키워드에 이미 있는 단어는 반복 금지) + "
+            "자연스러운 꼬리('방문 전 알아둘 것', '가기 전 체크' 등). 25~35자, 나열형·괄호 덕지덕지 금지. "
+            f"예: '{kw} 셔틀버스와 먹거리 부스, 가기 전 체크'. ('총정리'·'완벽 가이드' 금지)")
 
 
 def _build_system_prompt() -> str:
@@ -1373,17 +1398,17 @@ def _longtail_hits(title: str) -> list[str]:
 
 
 def _longtail_rule(kw: str) -> str:
-    return (f"★★ 롱테일 제목 강제: 메인 스팟 이름 '{kw}' **뒤에 실제 이용자가 덧붙여 검색하는 세부 키워드를 최소 2개 이상** 조합한다 — "
+    return (f"★★ 롱테일 제목: 제목 키워드 '{kw}' **뒤에 실제 이용자가 덧붙여 검색하는 세부 키워드를 2개** 조합한다(키워드에 이미 든 단어 반복 금지) — "
             "예: 위치, 주차, 예매(사전예약·예약 방법), 웨이팅, 굿즈 리스트, 주말 오픈런, 운영시간, 입장료, 포토존. "
             f"좋은 예: '{kw} 위치 주차 예매', '{kw} 웨이팅·사전예약·주차장 정리', '{kw} 굿즈 리스트와 주말 오픈런'. "
             f"**지역명(성수동·한남동 등)·월·'데이트 코스'는 제목에 넣을 필요가 없다** — 나쁜 예: '성수 {kw}', '{kw} 성수동 데이트 요금·예약 정리'. "
             "특정 팝업/행사가 메인이면 제목은 '정식 행사명 + 세부 키워드'만으로 쓴다. "
-            "**제목에 다루는 메인 장소명(1~2곳)이 반드시 들어가야 하고 세부 키워드는 3개 이상 넣는다.** "
-            "(네이버 제목은 20~30자라 세부 키워드는 짧게 쓰고, '꿀팁'은 금지어이므로 '방법·정리·후기'로 쓴다. 티스토리 제목에도 2개 이상 넣는다.) ")
+            "**제목에 다루는 메인 장소명(1~2곳)이 반드시 들어가야 하고, 세부 키워드는 2개까지만(3개 이상 나열은 키워드 도배로 감점).** "
+            "(네이버 제목은 20~30자라 세부 키워드는 짧게 쓰고, '꿀팁'은 금지어이므로 '방법·정리·후기'로 쓴다. 티스토리 제목도 1~2개.) ")
 
 
 def _seo_rules(research: dict) -> str:
-    kw = research.get("golden_keyword")
+    kw = research.get("title_keyword") or research.get("golden_keyword")
     if not kw:
         return ""
     rel = ", ".join(f"{r['kw']}(월 {r['total']:,})" for r in (research.get("seo_keywords") or [])[:8])
@@ -1491,7 +1516,7 @@ def _overlap_ratio(a: str, b: str) -> float:
 
 def write_tistory(research: dict, naver_body: str) -> dict | None:
     """티스토리 전용 글을 별도 호출로 생성. 실패하면 None(→ write_posts가 만든 티스토리 본문을 그대로 쓴다)."""
-    kw = research.get("golden_keyword") or research.get("target_keyword") or ""
+    kw = research.get("title_keyword") or research.get("golden_keyword") or research.get("target_keyword") or ""
     rel = ", ".join(r["kw"] for r in (research.get("seo_keywords") or [])[:8]) or "(없음)"
     cat = research.get("topic_category")
     facts = {k: v for k, v in research.items() if k not in ("style",)}
@@ -2514,10 +2539,10 @@ def fix_titles(post: dict, research: dict) -> None:
     새 제목이 검사를 통과할 때만 교체한다."""
     _, soft = check_post(post)
     title_soft = [x for x in soft if "제목" in x]
-    gk = research.get("golden_keyword")
+    gk = research.get("title_keyword") or research.get("golden_keyword")
 
-    def _kw_in_front(title: str) -> bool:
-        return not gk or _norm_place(gk) in _norm_place(title)[:16]
+    def _kw_in_front(title: str) -> bool:  # 황금지수로 고른 제목 키워드가 띄어쓰기 무시하고 앞부분에 통째로 있어야 검색어 일치
+        return not gk or _norm_place(gk) in _norm_place(title)[:len(_norm_place(gk)) + 6]
     if gk and not _kw_in_front(post["naver_title"]):
         title_soft.append(f"네이버 제목 앞 12자 안에 황금 키워드 '{gk}'가 없음")
     hot = bool(research.get("hot"))

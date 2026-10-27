@@ -119,12 +119,19 @@ jobs:
           fi
           rm -f tistory.b64 naver.b64
 
+      - name: 네이버 순위 점검(하루 1번, 21시 이후 — 키워드 전략 피드백용)
+        if: always() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        continue-on-error: true
+        run: |
+          f="outputs/rank/rank_$(date +%Y%m%d).json"
+          if [ "$(date +%H)" -ge 21 ] && [ ! -f "$f" ]; then timeout 600 .venv/bin/python rank_check.py 14 || true; fi
+
       - name: 상태 저장(발행 이력·중복 방지)
         if: always() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
         run: |
           git config user.name "blog-bot"
           git config user.email "blog-bot@users.noreply.github.com"
-          git add topics.md used_state.json run_state.json spike_state.json outputs/cache/kw_volumes.json 2>/dev/null || true
+          git add topics.md used_state.json run_state.json spike_state.json outputs/cache/kw_volumes.json outputs/cache/blog_docs.json outputs/rank 2>/dev/null || true
           if ! git diff --cached --quiet; then
             git commit -q -m "state: $(date '+%Y-%m-%d %H:%M') 실행 결과"
             for i in 1 2 3; do git pull -q --rebase && git push -q && break; sleep 5; done
