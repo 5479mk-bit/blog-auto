@@ -42,7 +42,7 @@ BASE_DIR = Path(__file__).parent
 DAILY_TARGET = 4                     # 하루 목표 발행 횟수 (2026-09-26: 5→6회, 새벽 2시 슬롯 추가)
 SCHEDULED_HOURS = [10, 14, 17, 21]  # 2026-10-19: 하루 4편  # 정규 예약 시각 (한국시간) — n8n cron과 반드시 일치시킬 것
 # (2026-09-26: 20시 → 21시로 변경 + 새벽 2시 추가 — 사용자 지시)
-CATCHUP_GAP_HOURS = 3            # 보충 실행 간격 (사용자 지정: 3시간)
+CATCHUP_GAP_HOURS = 1            # 보충 실행 간격 (2026-10-27: 3→1시간 — GitHub 예약 누락이 잦아 3시간이면 그날 마지막 슬롯을 못 채웠다)
 MAX_ATTEMPTS_PER_DAY = 10        # 주제 소진 등으로 계속 실패할 때 무한 재시도 방지 (목표의 2배)
 
 
@@ -84,7 +84,7 @@ def main() -> int:
     behind = expected - successes
     print(
         f"[guard] 보충 실행 시작 — 오늘 {successes}/{DAILY_TARGET}회 완료, "
-        f"{behind}회 밀림 (예정 {expected}회). 3시간 간격으로 채웁니다.",
+        f"{behind}회 밀림 (예정 {expected}회). {CATCHUP_GAP_HOURS}시간 간격으로 채웁니다.",
         flush=True,
     )
     proc = subprocess.run([sys.executable, str(BASE_DIR / "run_daily_post.py")], cwd=str(BASE_DIR))
