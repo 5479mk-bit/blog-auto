@@ -16,6 +16,8 @@ outputs/*
 !outputs/cache/
 outputs/cache/*
 !outputs/cache/kw_volumes.json
+!outputs/cache/blog_docs.json
+!outputs/rank/
 debug_shots/
 golden_ctx.json
 .pipeline.lock
