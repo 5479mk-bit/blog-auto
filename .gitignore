@@ -17,6 +17,7 @@ outputs/*
 outputs/cache/*
 !outputs/cache/kw_volumes.json
 !outputs/cache/blog_docs.json
+!outputs/cache/llm_cands.json
 !outputs/rank/
 debug_shots/
 golden_ctx.json

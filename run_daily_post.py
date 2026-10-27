@@ -477,9 +477,9 @@ def _engine_candidates() -> list[tuple[float, str, dict]]:
         print(f"[topic] 순위 실측 보정 배수: {factors}", flush=True)
     done_today = today_engine_counts()
     out = []
-    for kind, fn in (("kpop", lambda: pick_kpop(_kpop_llm_events(), exclude_kw)),
+    for kind, fn in (("kpop", lambda: pick_kpop(_llm_cached("kpop", _kpop_llm_events), exclude_kw)),
                      ("festival", lambda: pick_festival(exclude_kw, toks)),
-                     ("hot", lambda: pick_hot(_hot_llm_names(), places, toks, [])),
+                     ("hot", lambda: pick_hot(_llm_cached("hot", _hot_llm_names), places, toks, [])),
                      ("season", lambda: pick_season(exclude_kw, toks)),
                      ("evergreen", lambda: pick_evergreen(ever_recent | _SKIPPED_KW, toks))):
         w = weights.get(kind, 1.0) * factors.get(kind, 1.0)
@@ -575,6 +575,27 @@ def _best_engine_topic() -> str | None:
             f"(발굴: {datetime.now():%Y-%m-%d %H:%M})")
 
 
+_LLM_CACHE = BASE_DIR / "outputs" / "cache" / "llm_cands.json"
+LLM_CACHE_HOURS = 6  # 2026-10-27: 후보 수집용 웹검색 호출 2회가 매 실행 돌아 Claude 사용 한도를 빨리 소진 → 6시간 재사용
+
+
+def _llm_cached(key: str, fn):
+    try:
+        cache = json.loads(_LLM_CACHE.read_text(encoding="utf-8"))
+    except Exception:
+        cache = {}
+    hit = cache.get(key)
+    if hit and hit.get("data") and datetime.now().timestamp() - hit["ts"] < LLM_CACHE_HOURS * 3600:
+        print(f"[cache] {key} 후보 재사용({len(hit['data'])}개, {(datetime.now().timestamp() - hit['ts']) / 3600:.1f}시간 전)", flush=True)
+        return hit["data"]
+    data = fn()
+    if data:
+        cache[key] = {"ts": datetime.now().timestamp(), "data": data}
+        _LLM_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        _LLM_CACHE.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+    return data
+
+
 def _kpop_llm_events() -> list[dict]:
     """웹검색으로 앞으로 2~40일 안의 K팝 팬덤 행사를 모은다. 한 줄: 행사명 | 아티스트(쉼표) | 날짜 | 장소 | 지금 팬들이 찾는 포인트."""
     prompt = (f"오늘은 {datetime.now():%Y-%m-%d}(KST)다. 웹검색(뉴스·공식 SNS 우선)으로 **앞으로 2~40일 안에** 열리거나 티켓팅·투표·라인업 발표가 있는 "
@@ -625,7 +646,7 @@ def _hot_llm_names() -> list[str]:
     names = []
     for l in out.splitlines():
         l = re.sub(r"^[\s\-\*\d\.\)]+", "", l).strip()
-        if 2 <= len(l) <= 30 and not re.search(r"[:：]|http|출처|Sources", l):
+        if 2 <= len(l) <= 30 and not re.search(r"[:：()/]|http|출처|Sources|웹사이트|홈페이지|페이지|공식\s?앱|티켓팅|인터파크|YES24", l):
             names.append(l)
     return names[:10]
 

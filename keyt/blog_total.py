@@ -18,12 +18,13 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
 
 def main() -> int:
     cfg = load_api_settings()
-    out: dict[str, int | None] = {}
+    out: dict[str, int | None | str] = {}
     for kw in sys.argv[1:]:
         try:
             out[kw] = int(get_blog_total(kw, cfg["NAVER_CLIENT_ID"], cfg["NAVER_CLIENT_SECRET"]))
-        except (BlogSearchError, ValueError, KeyError, TypeError):
+        except (BlogSearchError, ValueError, KeyError, TypeError) as e:
             out[kw] = None
+            out.setdefault("_error", str(e)[:160])  # 원인(키 없음/권한 없음 등)을 호출 측 로그에 남긴다
         time.sleep(0.15)
     print(json.dumps(out, ensure_ascii=False))
     return 0
