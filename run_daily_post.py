@@ -973,6 +973,7 @@ _BAD_IMAGE_HOSTS = (
 )
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 _JUNK_IMG_RE = re.compile(r"logo|icon|sprite|favicon|emoji|badge|button|loading|blank|1x1|pixel|avatar|profile_pic", re.I)
+_DEAD_HOSTS: set[str] = set()  # 2026-10-28: 해외(Actions) IP를 막는 국내 공공 사이트(culture.seoul.go.kr 등)는 한 번 타임아웃 나면 이후 건너뜀
 
 
 def _place_tokens(name: str) -> list[str]:
@@ -989,6 +990,8 @@ def _is_gif(u: str) -> bool:
 def _page_images(page_url: str, tokens: list[str] | None = None, limit: int = 6) -> list[str]:
     """공식 페이지 HTML에서 대표 이미지(og:image/twitter:image) + 본문 <img> 주소를 뽑는다.
     로그인 벽/봇 차단이 걸리면 조용히 빈 목록(그 장소는 카드뉴스+다른 장소 사진으로 진행)."""
+    if urllib.parse.urlparse(page_url).netloc.lower() in _DEAD_HOSTS:
+        return []
     try:
         host = urllib.parse.urlparse(page_url).netloc.lower()
         ua = _UA
@@ -1006,6 +1009,8 @@ def _page_images(page_url: str, tokens: list[str] | None = None, limit: int = 6)
         doc = raw.decode(charset, errors="replace")
     except Exception as e:
         print(f"[photo] 공식 페이지 열기 실패({urllib.parse.urlparse(page_url).netloc}): {type(e).__name__}", flush=True)
+        if "timed out" in str(e) or isinstance(e, TimeoutError):
+            _DEAD_HOSTS.add(urllib.parse.urlparse(page_url).netloc.lower())
         return []
     found: list[str] = []
     for m in re.finditer(r'<meta[^>]+(?:property|name)=["\'](?:og:image|twitter:image)["\'][^>]*>', doc, re.I):
@@ -1110,6 +1115,53 @@ def _download_images_2track(research: dict, main_cap: int = 4) -> list[dict]:
     return results
 
 
+_TOUR_CREDIT = "한국관광공사(공공누리 제1유형)"
+
+
+def _tour_image_urls(name: str, limit: int = 4) -> list[str]:
+    """한국관광공사 TourAPI에서 장소/축제 사진(공공누리 제1유형=출처표시만 하면 자유 이용)만 골라 URL 목록으로.
+    공식 페이지에서 사진을 못 받는 곳(궁궐·광장·축제 등)의 보충용. 2026-10-28 신설 — 정동야행 글이 실사 0장으로 나간 사건."""
+    key = os.environ.get("TOUR_API_KEY")
+    if not key:
+        try:
+            from collectors import load_api_keys
+            load_api_keys()
+            key = os.environ.get("TOUR_API_KEY")
+        except Exception:
+            return []
+    q = re.sub(r"\([^)]*\)|\b20\d\d\b", " ", name)
+    q = re.sub(r"\s+", " ", q).strip()
+    if len(q) < 2 or not key:
+        return []
+    base = "https://apis.data.go.kr/B551011/KorService2/"
+    common = f"serviceKey={key}&MobileOS=ETC&MobileApp=blog&_type=json"
+
+    def _items(url: str) -> list[dict]:
+        try:
+            body = json.loads(urllib.request.urlopen(url, timeout=15).read().decode())["response"]["body"]
+            it = (body.get("items") or {}).get("item") or []
+            return it if isinstance(it, list) else [it]
+        except Exception as e:
+            print(f"[photo] TourAPI 실패({q}): {type(e).__name__}", flush=True)
+            return []
+    toks = [t for t in _place_tokens(q) if len(t) >= 2] or [q.replace(" ", "")]
+    hits = [it for it in _items(f"{base}searchKeyword2?{common}&numOfRows=5&pageNo=1&arrange=Q&keyword={urllib.parse.quote(q)}")
+            if any(t in str(it.get("title", "")).replace(" ", "") for t in toks)]
+    urls: list[str] = []
+    for it in hits[:2]:
+        if it.get("firstimage") and it.get("cpyrhtDivCd") == "Type1":
+            urls.append(it["firstimage"])
+        for im in _items(f"{base}detailImage2?{common}&numOfRows=10&pageNo=1&imageYN=Y&contentId={it.get('contentid', '')}"):
+            if im.get("originimgurl") and im.get("cpyrhtDivCd") == "Type1":
+                urls.append(im["originimgurl"])
+        if len(urls) >= limit:
+            break
+    urls = list(dict.fromkeys(u.replace("http://", "https://") for u in urls))[:limit]
+    if urls:
+        print(f"[photo] {q}: 한국관광공사 사진 후보 {len(urls)}장", flush=True)
+    return urls
+
+
 def _download_images(research: dict, per_place_max: int = 5) -> list[dict]:
     """공식 이미지 URL을 내려받아 [{place, place_idx, path, caption}]로 돌려준다. 막힌 CDN(403)·너무 작은 파일·
     중복은 건너뛴다. 실패해도 글은 계속(카드뉴스 + 받은 만큼). 메인 스팟은 최대 5장, 함께 즐길 곳은 각 1장."""
@@ -1157,10 +1209,17 @@ def _download_images(research: dict, per_place_max: int = 5) -> list[dict]:
                     candidates.append(iu)
                     origin.setdefault(iu, page_host)
         ordered = sorted(dict.fromkeys(candidates), key=lambda u: 0 if _is_gif(u) else 1)
+        if not event_mode or pi < len(mains):  # 공식 사진 뒤에 관광공사 사진을 보충 후보로(공식이 모자랄 때만 실제로 쓰인다)
+            for tu in _tour_image_urls(name, cap_n):
+                if tu not in ordered:
+                    ordered.append(tu)
+                    origin[tu] = _TOUR_CREDIT
         for orig in ordered:
             if got >= cap_n:
                 break
             host = urllib.parse.urlparse(orig).netloc.lower()
+            if host in _DEAD_HOSTS:
+                continue
             if any(b in host for b in _BAD_IMAGE_HOSTS):
                 print(f"[photo] 수집 금지 출처라 제외: {host}", flush=True)
                 continue
@@ -1171,6 +1230,8 @@ def _download_images(research: dict, per_place_max: int = 5) -> list[dict]:
                     data = resp.read(9_000_001)
             except Exception as e:
                 print(f"[photo] 다운로드 실패({host}): {type(e).__name__} {str(e)[:60]}", flush=True)
+                if "timed out" in str(e) or isinstance(e, TimeoutError):
+                    _DEAD_HOSTS.add(host)
                 continue
             if len(data) < 8000:
                 continue
