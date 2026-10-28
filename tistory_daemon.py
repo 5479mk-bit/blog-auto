@@ -27,6 +27,7 @@ Naver처럼 "프로필 폴더 재사용"만으로는 프로세스를 껐다 켜�
 """
 
 import json
+import re
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -62,11 +63,29 @@ def _try_kakao_sso(page) -> None:
             pass
 
 
+def _login_state(page) -> str:
+    """로그인이 안 될 때 원인을 로그로 남기기 위한 현재 화면 요약(주소·제목·보이는 글자 일부). 2026-10-28: 쿠키 복원 후 몇 시간 만에
+    로그인이 실패했는데 로그에 아무것도 없어 원인을 알 수 없었다(캡차/2단계 인증/새 환경 로그인 확인 등일 수 있음)."""
+    try:
+        text = re.sub(r"\s+", " ", page.inner_text("body", timeout=2000))[:260]
+    except Exception:
+        text = "(본문 읽기 실패)"
+    try:
+        title = page.title()
+    except Exception:
+        title = ""
+    return f"url={page.url[:140]} | title={title[:40]} | text={text}"
+
+
 def _wait_for_login(page, timeout_sec: int = 600) -> bool:
     deadline = time.time() + timeout_sec
     stable_since = None
+    next_report = time.time() + 20
     while time.time() < deadline:
         url = page.url
+        if time.time() >= next_report:
+            print(f"[tistory-daemon] 로그인 대기 중 — {_login_state(page)}", flush=True)
+            next_report = time.time() + 45
         looks_logged_in = "/manage" in url and "login" not in url and "kakao" not in url
         if not looks_logged_in:
             _try_kakao_sso(page)
