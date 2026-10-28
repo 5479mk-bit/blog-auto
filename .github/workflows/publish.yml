@@ -1,13 +1,11 @@
 name: blog-publish
 
-# 하루 4편(한국시간 10·14·17·21시) + 지연/실패 보충. GitHub 예약 실행은 몇 분~수십 분 늦을 수 있다.
+# 하루 4편(한국시간 10·14·17·21시). 2026-10-28: GitHub 예약 실행이 정해진 시각을 자주 통째로 누락한다(10/27 21시, 10/28 10시).
+# → 10:00~22:59 KST 동안 20분마다 깨워 '지금까지 지났어야 할 슬롯 수보다 발행이 모자라면 1편'(catchup_guard)만 한다.
+#   할 일이 없으면 설치 전 확인 단계에서 10초 안에 끝나므로(공개 레포) 비용이 거의 없고, 한두 번 누락돼도 20분 안에 따라잡는다.
 on:
   schedule:
-    - cron: "7 1 * * *"    # 10:00 KST (정각은 GitHub가 자주 누락해 7분에)
-    - cron: "7 5 * * *"    # 14:00 KST
-    - cron: "7 8 * * *"    # 17:00 KST
-    - cron: "7 12 * * *"   # 21:00 KST
-    - cron: "37 2,4,6,9,11,13 * * *"  # 보충(catchup_guard: 밀린 슬롯만 채움, 3시간 간격 규칙은 그대로)
+    - cron: "7,27,47 1-13 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -48,7 +46,7 @@ jobs:
       - name: 할 일 확인(설치 전 — Actions 사용 시간 절약)
         id: gate
         env:
-          MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || (github.event.schedule == '37 2,4,6,9,11,13 * * *' && 'guard' || 'slot') }}
+          MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'guard' }}
           DRY: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
         run: |
           if [ "$DRY" = "true" ]; then echo "run=true" >> "$GITHUB_OUTPUT"; echo "드라이런 — 항상 실행"; exit 0; fi
@@ -115,7 +113,7 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         env:
           DRY: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
-          MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || (github.event.schedule == '37 2,4,6,9,11,13 * * *' && 'guard' || 'slot') }}
+          MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'guard' }}
         run: |
           if [ "$DRY" = "true" ]; then export DRY_RUN=1 SKIP_VISUAL_GATE=1; echo "드라이런"; fi
           if [ "$MODE" = "guard" ]; then
