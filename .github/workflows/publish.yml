@@ -123,6 +123,12 @@ jobs:
           fi
           tail -60 logs/run_daily_post.log || true
 
+      - name: 티스토리 로그인 상태 기록(실패 원인 확인용)
+        if: always() && steps.gate.outputs.run == 'true'
+        continue-on-error: true
+        run: |
+          curl -fs http://127.0.0.1:8765/health > /dev/null && echo "티스토리 데몬: 로그인 OK" || { echo "티스토리 데몬: 로그인 실패 — 데몬 로그:"; grep -a "tistory-daemon" logs/tistory_daemon.log | tail -15; }
+
       - name: 갱신된 로그인 쿠키를 Secret에 다시 저장(만료 방지)
         if: (always()) && steps.gate.outputs.run == 'true'
         continue-on-error: true
