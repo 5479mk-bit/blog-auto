@@ -62,6 +62,8 @@ def precheck(mode: str) -> tuple[bool, str]:
     표준 라이브러리만 쓴다(설치 전 단계에서 돈다)."""
     now = datetime.now()
     state = run_state.load()
+    if mode == "force":  # 수동 재발행 — 시간대·하루 편수 제한을 보지 않는다
+        return True, "수동 강제 발행"
     if mode not in ("guard", "guard_chain"):
         if now.hour < 9:
             return False, "새벽 슬롯은 쉰다"
