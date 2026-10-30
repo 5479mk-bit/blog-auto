@@ -22,6 +22,8 @@ _DONE_RE = re.compile(r"\[완료\] \((\d{4}-\d\d-\d\d) \d\d:\d\d\)")
 
 
 def topic_engine(line: str) -> str:
+    if "[ROUNDUP]" in line:
+        return "roundup"
     if "[KPOP]" in line:
         return "kpop"
     if "[FESTIVAL]" in line:
