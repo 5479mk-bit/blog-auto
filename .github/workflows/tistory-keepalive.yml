@@ -1,0 +1,79 @@
+name: tistory-keepalive
+
+# 2026-10-30: 카카오 로그인이 쿠키 수명(30일)과 별개로 몇 시간 안에 서버 쪽에서 끊긴다(QR 로그인 후 1~2시간은 되고 4~6시간 뒤엔 로그인 화면으로 돌아감).
+# 가설: 한동안 접속하지 않으면 세션이 끝난다 → 주기적으로 쿠키로 접속해 세션을 이어 가고, 갱신된 쿠키를 Secret에 다시 저장한다.
+# 이 워크플로는 그 가설을 검증하는 역할도 한다: 실행 로그에 '복원 쿠키 수명'과 '로그인 성공/실패'가 남는다.
+#   실패하면 빨간 실행으로 남아 몇 시간 만에 끊겼는지 알 수 있다(마지막 성공 실행 시각 ~ 첫 실패 실행 시각).
+# 호출: cron-job.org(POST .../tistory-keepalive.yml/dispatches, 30분마다) 또는 GitHub 예약(보조, 자주 누락됨).
+on:
+  schedule:
+    - cron: "17,47 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: tistory-keepalive
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TZ: Asia/Seoul
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 시스템 패키지(가상 화면·한글 폰트)
+        timeout-minutes: 10
+        run: |
+          for i in 1 2 3; do
+            timeout 180 sudo apt-get update -qq && timeout 240 sudo apt-get install -y -qq xvfb fonts-noto-cjk > /dev/null && exit 0
+            echo "apt 재시도 $i"; sleep 10
+          done
+          exit 1
+
+      - name: Python 환경
+        timeout-minutes: 10
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -q -r requirements.txt
+          .venv/bin/python -m playwright install --with-deps chrome
+          mkdir -p logs
+
+      - name: 쿠키 복원 + 로그인 확인
+        id: login
+        env:
+          TISTORY_COOKIES: ${{ secrets.TISTORY_COOKIES }}
+          CHROME_CHANNEL: chrome
+        run: |
+          .venv/bin/python session_cookies.py restore
+          nohup xvfb-run -a .venv/bin/python -u tistory_daemon.py > logs/tistory_daemon.log 2>&1 &
+          for i in $(seq 1 24); do
+            if curl -fs http://127.0.0.1:8765/health > /dev/null; then echo "ok=true" >> "$GITHUB_OUTPUT"; echo "티스토리 로그인 OK"; exit 0; fi
+            sleep 5
+          done
+          echo "ok=false" >> "$GITHUB_OUTPUT"
+          echo "::error::티스토리 로그인 실패 — 카카오가 보여준 화면:"
+          grep -a "tistory-daemon" logs/tistory_daemon.log | tail -5 || true
+          exit 1
+
+      - name: 갱신된 쿠키를 Secret에 저장
+        if: steps.login.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          [ -n "$GH_TOKEN" ] || { echo "GH_PAT 없음 — 건너뜀"; exit 0; }
+          sleep 15   # 로그인 직후 카카오·티스토리가 내려주는 갱신 쿠키(Set-Cookie)가 브라우저에 자리 잡도록 잠깐 기다린다
+          curl -fs http://127.0.0.1:8765/cookies | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['n']>0; print(d['b64'])" > tistory.b64
+          gh secret set TISTORY_COOKIES --repo "$GITHUB_REPOSITORY" < tistory.b64 && echo "TISTORY_COOKIES 갱신"
+          rm -f tistory.b64
