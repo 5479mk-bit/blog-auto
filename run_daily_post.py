@@ -31,6 +31,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -98,7 +99,7 @@ NAVER_CATEGORY_EVENT = os.environ.get("NAVER_CATEGORY_EVENT", "공연/전시/행
 TISTORY_CATEGORY_EVENT = os.environ.get("TISTORY_CATEGORY_EVENT", "공연/전시/행사")
 TISTORY_DAEMON_URL = "http://127.0.0.1:8765/post"
 
-CATEGORIES = ("POPUP_ROUNDUP", "HOTPLACE", "DATE_COURSE", "KPOP", "FESTIVAL")
+CATEGORIES = ("POPUP_ROUNDUP", "HOTPLACE", "DATE_COURSE", "KPOP", "FESTIVAL", "ROUNDUP")
 EVENT_CATS = ("KPOP", "FESTIVAL")  # 2026-10-21: K팝 팬덤·전국 축제 모드(데이트코스와 다른 템플릿)
 QUEUE_MAX_AGE_HOURS = 12  # 자동 발굴 주제는 발굴 후 12시간이 지나면 폐기(팝업은 가십보다 수명이 길다)
 MIN_NAVER_CHARS = 1500
@@ -191,7 +192,7 @@ def _extract_json(output: str):
 
 # ── ① 주제: topics.md 큐 → 없으면 자동 발굴 ───────────────────
 _DISCOVERY_TIME_RE = re.compile(r"\((?:발굴)[:,]?\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2})\)")
-_CATEGORY_TAG_RE = re.compile(r"\[(POPUP_ROUNDUP|HOTPLACE|DATE_COURSE|KPOP|FESTIVAL)\]")
+_CATEGORY_TAG_RE = re.compile(r"\[(POPUP_ROUNDUP|HOTPLACE|DATE_COURSE|KPOP|FESTIVAL|ROUNDUP)\]")
 
 
 def _parse_discovery_time(line: str) -> datetime | None:
@@ -387,6 +388,8 @@ def record_used(research: dict, topic: str) -> None:
     if region:
         st.setdefault("regions", {})[region] = now
         st["recent_regions"] = (st.get("recent_regions") or [])[-5:] + [region]
+    if research.get("roundup_month"):  # 월간 총정리 글은 달마다 한 번만
+        st.setdefault("roundups", {})[research["roundup_month"]] = now
     if research.get("golden_keyword"):
         st.setdefault("keywords", {})[_norm_place(research["golden_keyword"])] = now
     if research.get("title_keyword"):  # 롱테일 제목 키워드도 기록 — 상시 키워드 60일 재사용 금지에 걸리도록
@@ -446,6 +449,33 @@ def _golden_topic() -> str | None:
 
 
 _SKIPPED_KW: set[str] = set()
+
+
+def _roundup_candidate() -> dict | None:
+    """월간 전국 축제 총정리 글(roundup.py)이 필요한 시기면 후보를 돌려준다. 달마다 한 번, 실패하면 6시간 뒤에 다시."""
+    import roundup as RU
+    tm = RU.target_month(datetime.now().date())
+    if not tm:
+        return None
+    key = f"{tm[0]}-{tm[1]:02d}"
+    st = _load_used()
+    if key in (st.get("roundups") or {}):
+        return None
+    if datetime.now().timestamp() - float((st.get("roundup_try") or {}).get(key, 0)) < 6 * 3600:
+        return None
+    vol = 0
+    try:
+        from golden_keywords import cached_volume
+        vol = int((cached_volume(f"{tm[1]}월 축제") or {}).get("total") or 0)
+    except Exception:
+        pass
+    return {"keyword": f"{tm[1]}월 축제", "volume": vol, "comp": "", "exp": 999.0, "related": [], "events": [], "roundup": key}
+
+
+def _roundup_mark_try(key: str) -> None:
+    st = _load_used()
+    st.setdefault("roundup_try", {})[key] = datetime.now().timestamp()
+    USED_FILE.write_text(json.dumps(st, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
 def _feed_boost(spike) -> float:
@@ -535,6 +565,13 @@ def _engine_candidates() -> list[tuple[float, str, dict]]:
                 best = (exp, kind, c)
         if best:
             out.append(best)
+    try:  # 월간 전국 축제 총정리 글: 시기가 되면 다른 후보보다 먼저(달마다 한 번)
+        rd = _roundup_candidate()
+        if rd and done_today.get("roundup", 0) < MAX_PER_ENGINE_PER_DAY:
+            print(f"[topic] 엔진 roundup: {rd['roundup']} 월간 전국 축제 총정리 글 차례", flush=True)
+            out.append((rd["exp"], "roundup", rd))
+    except Exception as e:
+        print(f"[topic] roundup 후보 확인 실패({type(e).__name__}): {str(e)[:80]}", file=sys.stderr)
     return sorted(out, key=lambda t: -t[0])
 
 
@@ -565,6 +602,10 @@ def _best_engine_topic() -> str | None:
     if kind == "hot":
         return (f"{g['keyword']} [DATE_COURSE] [황금] [핫] — 선점형 화제 팝업/행사 '{g['keyword']}'({meta}"
                 + (f", 브랜드 검색량 {g['brand_volume']:,}" if g.get("brand_volume") else "") + f") (발굴: {datetime.now():%Y-%m-%d %H:%M})")
+    if kind == "roundup":
+        y, mo = map(int, g["roundup"].split("-"))
+        return (f"{mo}월 전국 축제 일정 [ROUNDUP] [황금] — 월간 총정리 '{g['keyword']}'(월 검색량 {g.get('volume', 0):,}회, 예상 일유입 {exp}) "
+                f"(대상: {g['roundup']}) (발굴: {datetime.now():%Y-%m-%d %H:%M})")
     if kind == "evergreen":
         return (f"{g['keyword']} [DATE_COURSE] [황금] [상시] — 상시 검색 키워드 '{g['keyword']}'({meta}, 시드 '{g.get('seed')}') "
                 f"(발굴: {datetime.now():%Y-%m-%d %H:%M})")
@@ -2903,6 +2944,8 @@ def _title_clash(title: str, n_recent: int = 14) -> str | None:
 
 def build_post(topic: str) -> dict:
     """리서치 → 이미지 → 글쓰기(+검사 재작성) → 이미지 배치/카드뉴스/태그까지 한 번에."""
+    if _topic_category(topic) == "ROUNDUP":
+        return build_roundup_post(topic)
     research = run_research(topic)
     _dedupe_research(research)
     if "[황금]" in topic or "(발굴:" in topic:  # 사용자가 직접 넣은 주제는 예외
@@ -3015,6 +3058,136 @@ def build_post(topic: str) -> dict:
         "naver_blocks": naver_blocks, "video_count": sum(len(v) for v in videos.values()),
     })
     return post
+
+
+def _fetch_tour_photo(url: str, out_dir: Path, name: str, seen: set[str]) -> str | None:
+    try:
+        req = urllib.request.Request(url.replace("http://", "https://"), headers={"User-Agent": _UA})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = resp.read(9_000_001)
+    except Exception as e:
+        print(f"[roundup] 사진 다운로드 실패({type(e).__name__}): {url[:60]}", flush=True)
+        return None
+    if len(data) < 8000 or len(data) > 9_000_000:
+        return None
+    ext = _sniff_image_ext(data)
+    fixed = _normalize_image(data, ext) if ext else None
+    if not fixed:
+        return None
+    data, ext = fixed
+    digest = hashlib.md5(data).hexdigest()
+    if digest in seen:
+        return None
+    seen.add(digest)
+    path = out_dir / f"{len(seen)}{ext}"
+    path.write_bytes(data)
+    return str(path)
+
+
+def build_roundup_post(topic: str) -> dict:
+    """월간 전국 축제 총정리 글(2026-10-30 신설). 사실(기간·장소·요금)은 한국관광공사 데이터로 코드가 쓰고, LLM은 도입·마무리만 쓴다."""
+    import roundup as RU
+    from collectors import load_api_keys
+    from golden_keywords import _festival_core, cached_volume
+    m = re.search(r"대상: (\d{4})-(\d{2})", topic)
+    if not m:
+        raise QualityGateError("월간 총정리: 대상 월을 알 수 없음")
+    year, month = int(m.group(1)), int(m.group(2))
+    mkey = f"{year}-{month:02d}"
+    _roundup_mark_try(mkey)  # 실패해도 6시간 안에 같은 시도를 반복하지 않는다
+    load_api_keys()
+    key = os.environ.get("TOUR_API_KEY")
+    if not key:
+        raise QualityGateError("월간 총정리: TOUR_API_KEY 없음")
+    try:
+        fests = RU.fetch_month_festivals(key, year, month)
+    except Exception as e:
+        raise QualityGateError(f"월간 총정리: 축제 데이터 조회 실패({type(e).__name__})")
+    print(f"[roundup] {mkey} 축제 {len(fests)}건", flush=True)
+    if len(fests) < 12:
+        raise QualityGateError(f"월간 총정리: {mkey} 축제가 {len(fests)}건뿐(최소 12건)")
+    # 검색량 순 선정 — 사진이 있는 축제 위주로 후보 45개의 검색량을 조회(7일 캐시), 시간 상한 150초
+    pool = sorted(fests, key=lambda f: (not f["image"], f["start"]))[:45]
+    volumes: dict[str, int] = {}
+    t0 = time.time()
+    for f in pool:
+        if time.time() - t0 > 150:
+            break
+        try:
+            volumes[f["title"]] = int((cached_volume(_festival_core(f["title"])) or {}).get("total") or 0)
+        except Exception:
+            continue
+    feat = RU.select_featured(fests, volumes)
+    print(f"[roundup] 선정 {len(feat)}곳: " + ", ".join(f"{f['title']}({volumes.get(f['title'], 0):,})" for f in feat[:8]), flush=True)
+    free: dict[str, bool | None] = {}
+    for f in feat:
+        free[f["contentid"]] = RU.is_free(RU.fee_text(key, f["contentid"]))
+    free_names = [f["title"] for f in feat if free.get(f["contentid"])]
+    groups = RU.group_by_region(feat)
+    # 사진: 공공누리 제1유형(출처 표시만 하면 자유 이용)으로 확인된 것만
+    out_dir = BASE_DIR / "outputs" / "photos" / (datetime.now().strftime("%Y%m%d_%H%M%S") + "_roundup")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    seen: set[str] = set()
+    photos: list[dict] = []
+    names: list[str] = []
+    for f in feat:
+        if len(photos) >= 10:
+            break
+        if f["image"] and f["license"] == "Type1":
+            path = _fetch_tour_photo(f["image"], out_dir, f["title"], seen)
+            if path:
+                photos.append({"place": f["title"], "place_idx": len(names), "path": path,
+                               "caption": f"사진 출처 = 한국관광공사(공공누리 제1유형) ({f['title']})"})
+                names.append(f["title"])
+    print(f"[roundup] 사진 {len(photos)}장(공공누리 제1유형)", flush=True)
+    facts = {"year": year, "month": month, "total": len(feat), "regions": {r: len(g) for r, g in groups},
+             "free": len(free_names), "first": [f"{f['title']} {RU.fmt_range(f['start'], f['end'])}" for f in sorted(feat, key=lambda f: f['start'])[:5]]}
+    intro, outro = RU.intro_template(year, month, len(feat), groups, len(free_names)), "축제는 날씨에 따라 현장 상황이 달라질 수 있으니 나서기 전에 공식 안내를 한 번 더 확인하고, 마음에 드는 곳부터 저장해 두세요."
+    try:
+        raw = _call_claude(
+            "아래 [사실]만으로 한국어 블로그 글의 도입 문단과 마무리 문단을 써라. 해요체. 도입 3~4문장(200~320자): 첫 문장에 "
+            f"'{year}년 {month}월 전국 축제 일정'을 넣고, 지역·개수는 사실 그대로. 마무리 2문장(80~140자): 방문 전 공식 안내 확인과 저장을 권한다. "
+            "★사실에 없는 축제·날짜·요금·후기를 만들지 않는다. '총정리·완벽·꿀팁·필독' 같은 말과 이모지는 쓰지 않는다. "
+            f"JSON 하나만 출력: {{\"intro\": \"...\", \"outro\": \"...\"}}\n\n[사실]\n{json.dumps(facts, ensure_ascii=False)}",
+            allowed_tools="", timeout=300)
+        data = _extract_json(raw) or {}
+        i2, o2 = str(data.get("intro", "")).strip(), str(data.get("outro", "")).strip()
+        if 120 <= len(i2) <= 480 and 40 <= len(o2) <= 260 and not _scan_banned(i2 + "\n" + o2):
+            intro, outro = i2, o2
+        else:
+            print(f"[roundup] LLM 도입/마무리 부적합(길이 {len(i2)}/{len(o2)}) — 템플릿 문장 사용", flush=True)
+    except ClaudeSessionLimitError:
+        raise
+    except Exception as e:
+        print(f"[roundup] LLM 도입/마무리 실패({type(e).__name__}) — 템플릿 문장 사용", flush=True)
+    faq_items = RU.faq(year, month, groups, free_names, feat)
+    feat_names = set(names)
+    nt, tt = RU.titles(year, month, groups, len(free_names))
+    naver_raw = RU.render_naver(year, month, groups, free, intro, outro, faq_items, feat_names)
+    tistory_raw = RU.render_tistory(year, month, groups, free, intro, outro, faq_items, feat_names)
+    naver_body, naver_imgs = place_images(naver_raw, photos, names)
+    tistory_body, tistory_imgs = place_images(tistory_raw, photos, names)
+    for im in tistory_imgs:
+        im["after_text"] = (im.get("after_text") or "").replace("==", "")
+    cover: list[dict] = []
+    try:
+        from render_slides import render_slides
+        slide = {"type": "title", "style": "feed", "heading": f"{month}월 전국 축제", "sub": f"{len(feat)}곳 날짜·장소",
+                 "badge": f"{year} 지역별 일정", "collage": [p["path"] for p in photos[:3]]}
+        paths = render_slides([slide], BASE_DIR / "outputs" / "images" / (datetime.now().strftime("%Y%m%d_%H%M%S") + "_roundup"))
+        cover = [{"path": str(paths[0]), "after_text": None, "caption": slide["heading"]}]
+    except Exception as e:
+        print(f"[roundup] 표지 렌더 실패(생략): {type(e).__name__} {str(e)[:80]}", flush=True)
+    research = {"topic_category": "ROUNDUP", "golden_keyword": f"{month}월 축제", "roundup_month": f"{year}-{month:02d}",
+                "main_places": [], "nearby_spots": [], "region": "", "target_keyword": f"{month}월 전국 축제 일정",
+                "style": {"id": "roundup"}}
+    return {
+        "naver_title": nt, "tistory_title": tt, "naver_content_body": naver_raw, "tistory_content_body": tistory_raw,
+        "naver_body_final": naver_body.strip(), "tistory_body_final": tistory_body.strip(), "naver_places_list": names[:6],
+        "tags": RU.tags(year, month, groups, bool(free_names)), "research": research, "official_photo_count": len(photos),
+        "video_count": 0, "naver_blocks": [], "naver_images": cover + naver_imgs, "tistory_images": cover + tistory_imgs,
+        "naver_category": NAVER_CATEGORY_EVENT, "tistory_category": TISTORY_CATEGORY_EVENT,
+    }
 
 
 def preflight() -> str | None:
