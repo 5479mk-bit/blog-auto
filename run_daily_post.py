@@ -461,7 +461,7 @@ def _roundup_candidate() -> dict | None:
     st = _load_used()
     if key in (st.get("roundups") or {}):
         return None
-    if datetime.now().timestamp() - float((st.get("roundup_try") or {}).get(key, 0)) < 6 * 3600:
+    if not os.environ.get("FORCE_ROUNDUP") and datetime.now().timestamp() - float((st.get("roundup_try") or {}).get(key, 0)) < 6 * 3600:
         return None
     vol = 0
     try:
@@ -3332,6 +3332,9 @@ def _run():
             break
         except QualityGateError as e:
             print(f"[gate] 품질 게이트 탈락 — 이 주제는 발행하지 않고 건너뜀: {e}", flush=True)
+            if os.environ.get("FORCE_ROUNDUP") and "[ROUNDUP]" in topic:
+                print("[gate] 총정리 전용 수동 실행 — 다른 주제로 넘어가지 않고 종료", flush=True)
+                sys.exit(2)
             try:
                 _SKIPPED_KW.add(_norm_place(json.loads(GOLDEN_CTX_FILE.read_text(encoding="utf-8"))["keyword"]))
             except Exception:

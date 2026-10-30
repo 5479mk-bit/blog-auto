@@ -17,6 +17,7 @@ LLM은 도입·마무리 문단만 쓰고, 실패하면 템플릿 문장으로 �
 """
 
 import json
+import time
 import re
 import urllib.parse
 import urllib.request
@@ -60,8 +61,16 @@ def _ymd(s: str) -> date | None:
 
 
 def _get(url: str, opener=urllib.request.urlopen) -> dict:
-    with opener(url, timeout=30) as r:  # type: ignore[call-arg]
-        return json.loads(r.read().decode("utf-8"))
+    # 공공데이터 API는 간헐적으로 연결이 끊긴다(10/31 URLError로 총정리 실패) → 3번까지 다시 시도
+    for i in range(3):
+        try:
+            with opener(url, timeout=30) as r:  # type: ignore[call-arg]
+                return json.loads(r.read().decode("utf-8"))
+        except Exception:
+            if i == 2:
+                raise
+            time.sleep(5 * (i + 1))
+    return {}
 
 
 def fetch_month_festivals(key: str, year: int, month: int, opener=urllib.request.urlopen) -> list[dict]:
