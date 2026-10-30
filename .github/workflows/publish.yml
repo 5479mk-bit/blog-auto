@@ -37,7 +37,11 @@ jobs:
       PIPELINE_BACKEND: hybrid
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
     steps:
+      # 2026-10-30: 큐에서 기다리던 실행은 '요청 시점'의 커밋으로 체크아웃돼 앞 실행이 남긴 상태(run_state·used_state·topics)가 빠진 채
+      # 돌았고, 끝의 상태 저장이 충돌해 발행 이력이 통째로 사라졌다(run 34). 항상 최신 main에서 시작한다.
       - uses: actions/checkout@v4
+        with:
+          ref: main
 
       - uses: actions/setup-python@v5
         with:
@@ -163,7 +167,7 @@ jobs:
           git add topics.md used_state.json run_state.json spike_state.json outputs/cache/kw_volumes.json outputs/cache/blog_docs.json outputs/cache/llm_cands.json outputs/rank 2>/dev/null || true
           if ! git diff --cached --quiet; then
             git commit -q -m "state: $(date '+%Y-%m-%d %H:%M') 실행 결과"
-            for i in 1 2 3; do git pull -q --rebase && git push -q && break; sleep 5; done
+            for i in 1 2 3; do git pull -q --rebase -X theirs && git push -q && break; git rebase --abort 2>/dev/null || true; sleep 5; done
           fi
 
       - name: 로그 보관
