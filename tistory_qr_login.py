@@ -43,6 +43,43 @@ def _click(page, *labels) -> bool:
     return False
 
 
+_KEEP_LABELS = ("간편로그인 정보 저장", "로그인 상태 유지", "Stay signed in", "Save Simple Login Info", "Keep me signed in")
+
+
+def _ensure_keep_login(page) -> str:
+    """카카오 로그인 화면의 '로그인 유지' 체크박스를 켠다. 2026-10-30: 진단 로그에 찍힌 실제 이름은 '간편로그인 정보 저장'인데
+    코드는 '로그인 상태 유지'만 찾아 한 번도 켜지지 않았을 가능성이 크다(카카오 세션이 몇 시간 만에 끝남).
+    결과 문자열(켜짐/이미 켜짐/못 찾음)을 돌려줘 로그에 남긴다."""
+    for label in _KEEP_LABELS:
+        try:
+            box = page.get_by_label(label, exact=False)
+            if box.count():
+                if box.first.is_checked():
+                    return f"이미 켜짐({label})"
+                box.first.check(force=True, timeout=3000)
+                return f"켰음({label}) → 확인={box.first.is_checked()}"
+        except Exception:
+            pass
+    for label in _KEEP_LABELS:  # 라벨 연결이 없는 커스텀 체크박스: 글자를 눌러 토글
+        if _click(page, label):
+            return f"글자 클릭({label}) — 상태 미확인"
+    return "체크박스를 못 찾음"
+
+
+def _cookie_summary(cookies: list[dict]) -> str:
+    """쿠키 이름·만료만 요약(값은 절대 출력하지 않는다). 카카오의 장기 로그인 쿠키가 있는지, 몇 일짜리인지 확인용."""
+    now = time.time()
+    rows = []
+    for c in cookies:
+        d = c.get("domain", "")
+        if "kakao" not in d:
+            continue
+        exp = c.get("expires", -1)
+        life = "세션" if not exp or exp <= 0 else f"{(exp - now) / 86400:.1f}일"
+        rows.append(f"{c.get('name')}({life})")
+    return ", ".join(sorted(rows))
+
+
 def _publish_qr() -> None:
     # 워크플로가 넘겨준 훅 스크립트로 qr-login 브랜치에 이미지를 올린다(로컬 실행이면 없음).
     hook = BASE / ".qr_push.sh"
@@ -63,7 +100,7 @@ def main() -> int:
         page.wait_for_timeout(1500)
         _click(page, "QR코드 로그인", "QR 코드 로그인", "QR코드로 로그인", "QR code")
         page.wait_for_timeout(1500)
-        _click(page, "로그인 상태 유지", "Stay signed in")
+        print(f"[keep-login] QR 화면: {_ensure_keep_login(page)}", flush=True)
         page.wait_for_timeout(1000)
 
         # 최초 안정적인 QR 코드 캡처 및 업로드 (카카오 QR은 5분간 유효하므로 매번 재발급 누르지 않음)
@@ -103,6 +140,7 @@ def main() -> int:
         cookies = [c for c in ctx.cookies() if any(d in c.get("domain", "") for d in DOMAINS)]
         ctx.close()
 
+    print(f"[cookies] 카카오 쿠키(이름·남은 수명): {_cookie_summary(cookies)}", flush=True)
     OUT.write_text(base64.b64encode(gzip.compress(json.dumps(cookies).encode())).decode())
     print(f"로그인 성공 — 쿠키 {len(cookies)}개 추출", flush=True)
     return 0

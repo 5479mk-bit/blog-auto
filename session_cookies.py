@@ -86,6 +86,13 @@ def restore() -> None:
             ctx.add_cookies(fixed)
             ctx.close()
             print(f"[cookies] {kind}: {len(cookies)}개 복원 → {prof.name}", flush=True)
+            if kind == "tistory":  # 2026-10-30: 로그인 실패 원인 진단 — 복원 직전 카카오 쿠키의 이름과 '원래' 수명(세션 쿠키는 위에서 30일로 바꿔 저장되므로 원본 기준)
+                rows = []
+                for c in cookies:
+                    if "kakao" in c.get("domain", ""):
+                        e = c.get("expires", -1)
+                        rows.append(f"{c.get('name')}({'세션' if not e or e <= 0 else format((e - _t.time()) / 86400, '.1f') + '일'})")
+                print(f"[cookies] 카카오 쿠키(이름·남은 수명): {', '.join(sorted(rows))}", flush=True)
 
 
 if __name__ == "__main__":
