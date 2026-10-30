@@ -42,6 +42,7 @@ BASE_DIR = Path(__file__).parent
 DAILY_TARGET = 4                     # 하루 목표 발행 횟수 (2026-09-26: 5→6회, 새벽 2시 슬롯 추가)
 SCHEDULED_HOURS = [10, 14, 17, 21]  # 2026-10-19: 하루 4편  # 정규 예약 시각 (한국시간) — n8n cron과 반드시 일치시킬 것
 # (2026-09-26: 20시 → 21시로 변경 + 새벽 2시 추가 — 사용자 지시)
+MAX_PER_WAKE = 3                 # 한 번 깨어났을 때 이어서 채울 최대 편수(10/29: 예약이 하루 3번만 와서 1편씩으로는 4편을 못 채움)
 CATCHUP_GAP_HOURS = 1            # 보충 실행 간격 (2026-10-27: 3→1시간 — GitHub 예약 누락이 잦아 3시간이면 그날 마지막 슬롯을 못 채웠다)
 MAX_ATTEMPTS_PER_DAY = 10        # 주제 소진 등으로 계속 실패할 때 무한 재시도 방지 (목표의 2배)
 
@@ -61,7 +62,7 @@ def precheck(mode: str) -> tuple[bool, str]:
     표준 라이브러리만 쓴다(설치 전 단계에서 돈다)."""
     now = datetime.now()
     state = run_state.load()
-    if mode != "guard":
+    if mode not in ("guard", "guard_chain"):
         if now.hour < 9:
             return False, "새벽 슬롯은 쉰다"
         if state["successes"] >= DAILY_TARGET:
@@ -71,6 +72,8 @@ def precheck(mode: str) -> tuple[bool, str]:
         return False, "오늘 목표 달성 또는 시도 한도"
     if state["successes"] >= expected_by_now(now):
         return False, "일정대로 진행 중"
+    if mode == "guard_chain":  # 같은 실행에서 이어서 하는 보충은 간격 규칙을 적용하지 않는다
+        return True, "이어서 보충"
     last = run_state.last_attempt_at()
     if last is not None and now - last < timedelta(hours=CATCHUP_GAP_HOURS):
         return False, f"직전 실행 후 {CATCHUP_GAP_HOURS}시간 대기 중"
@@ -109,9 +112,22 @@ def main() -> int:
         f"{behind}회 밀림 (예정 {expected}회). {CATCHUP_GAP_HOURS}시간 간격으로 채웁니다.",
         flush=True,
     )
-    proc = subprocess.run([sys.executable, str(BASE_DIR / "run_daily_post.py")], cwd=str(BASE_DIR))
-    print(f"[guard] 보충 실행 종료 (exit {proc.returncode})")
-    return proc.returncode
+    # 2026-10-30: GitHub 예약이 하루 2~3번만 오고 그때마다 1편씩만 보충해서 하루 3편밖에 못 채웠다(10/29).
+    # 한 번 깨어났을 때 밀린 만큼(최대 MAX_PER_WAKE편) 이어서 발행한다. 중간에 실패하면 거기서 멈춘다.
+    code = 0
+    for i in range(min(behind, MAX_PER_WAKE)):
+        if i:
+            print(f"[guard] 이어서 보충 {i + 1}/{min(behind, MAX_PER_WAKE)}", flush=True)
+            ok_more, why = precheck("guard_chain")
+            if not ok_more:
+                print(f"[guard] 더 채울 것 없음 — {why}")
+                break
+        proc = subprocess.run([sys.executable, str(BASE_DIR / "run_daily_post.py")], cwd=str(BASE_DIR))
+        code = proc.returncode
+        print(f"[guard] 보충 실행 종료 (exit {code})", flush=True)
+        if code != 0:
+            break
+    return code
 
 
 if __name__ == "__main__":
