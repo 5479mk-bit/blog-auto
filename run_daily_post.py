@@ -3084,6 +3084,59 @@ def _fetch_tour_photo(url: str, out_dir: Path, name: str, seen: set[str]) -> str
     return str(path)
 
 
+def _roundup_detail_images(key: str, contentid: str) -> list[str]:
+    """축제 contentid의 상세 이미지 중 공공누리 제1유형만."""
+    if not contentid:
+        return []
+    url = ("https://apis.data.go.kr/B551011/KorService2/detailImage2?serviceKey=" + key +
+           f"&MobileOS=ETC&MobileApp=blog&_type=json&numOfRows=10&pageNo=1&imageYN=Y&contentId={contentid}")
+    try:
+        body = json.loads(urllib.request.urlopen(url, timeout=15).read().decode())["response"]["body"]
+        it = (body.get("items") or {}).get("item") or []
+        it = it if isinstance(it, list) else [it]
+    except Exception as e:
+        print(f"[roundup] 상세 이미지 실패({contentid}): {type(e).__name__}", flush=True)
+        return []
+    return [im["originimgurl"].replace("http://", "https://") for im in it
+            if im.get("originimgurl") and im.get("cpyrhtDivCd") == "Type1"]
+
+
+def _roundup_videos(names: list[str]) -> dict[int, list[dict]]:
+    """사진이 들어간 대표 축제마다 유튜브 영상 1개(제목에 축제 핵심어가 있는 것만)."""
+    try:
+        from collectors import load_api_keys
+        load_api_keys()
+    except Exception:
+        pass
+    key = (_yt_keys() or [None])[0]
+    if not key:
+        print("[roundup] YOUTUBE_API_KEY 없음 — 영상 생략", flush=True)
+        return {}
+    from golden_keywords import _festival_core
+    out: dict[int, list[dict]] = {}
+    used: set[str] = set()
+    for i, nm in enumerate(names):
+        core = _festival_core(nm) or re.sub(r"\([^)]*\)|20\d\d|제\s?\d+\s?회", " ", nm).strip()
+        toks = [t for t in core.split() if len(t) >= 2] or [core]
+        for q in (f"{core} 현장", f"{core} 브이로그"):
+            try:
+                items = _youtube_search(key, q, None, 730)
+            except Exception:
+                items = []
+            for it in items:
+                sn, vid = it.get("snippet", {}), it.get("id", {}).get("videoId")
+                title = _html.unescape(sn.get("title", ""))
+                if vid and vid not in used and not _VIDEO_BAD_TITLE.search(title) and any(t in title.replace(" ", "") for t in [x.replace(" ", "") for x in toks]):
+                    used.add(vid)
+                    out[i] = [{"video_id": vid, "title": title, "channel": sn.get("channelTitle", ""),
+                               "url": f"https://www.youtube.com/watch?v={vid}"}]
+                    break
+            if i in out:
+                break
+    print(f"[roundup] 영상 {len(out)}개", flush=True)
+    return out
+
+
 def build_roundup_post(topic: str) -> dict:
     """월간 전국 축제 총정리 글(2026-10-30 신설). 사실(기간·장소·요금)은 한국관광공사 데이터로 코드가 쓰고, LLM은 도입·마무리만 쓴다."""
     import roundup as RU
@@ -3133,13 +3186,21 @@ def build_roundup_post(topic: str) -> dict:
     for f in feat:
         if len(photos) >= 10:
             break
-        if f["image"] and f["license"] == "Type1":
-            path = _fetch_tour_photo(f["image"], out_dir, f["title"], seen)
+        # 목록 API(searchFestival2)는 저작권 유형을 빠뜨리는 경우가 많다(10/30 첫 발행이 사진 0장) → 상세 이미지(detailImage2)·키워드 검색으로 Type1을 확인
+        cands = [f["image"]] if f["image"] and f["license"] == "Type1" else []
+        cands += _roundup_detail_images(key, f["contentid"])
+        if not cands:
+            cands = _tour_image_urls(f["title"], limit=2)
+        for url in cands[:2]:
+            path = _fetch_tour_photo(url, out_dir, f["title"], seen)
             if path:
                 photos.append({"place": f["title"], "place_idx": len(names), "path": path,
                                "caption": f"사진 출처 = 한국관광공사(공공누리 제1유형) ({f['title']})"})
                 names.append(f["title"])
+                break
     print(f"[roundup] 사진 {len(photos)}장(공공누리 제1유형)", flush=True)
+    if len(photos) < 4:
+        raise QualityGateError(f"월간 총정리: 사진 {len(photos)}장뿐(최소 4장) — 발행 보류")
     facts = {"year": year, "month": month, "total": len(feat), "regions": {r: len(g) for r, g in groups},
              "free": len(free_names), "first": [f"{f['title']} {RU.fmt_range(f['start'], f['end'])}" for f in sorted(feat, key=lambda f: f['start'])[:5]]}
     intro, outro = RU.intro_template(year, month, len(feat), groups, len(free_names)), "축제는 날씨에 따라 현장 상황이 달라질 수 있으니 나서기 전에 공식 안내를 한 번 더 확인하고, 마음에 드는 곳부터 저장해 두세요."
@@ -3165,8 +3226,11 @@ def build_roundup_post(topic: str) -> dict:
     nt, tt = RU.titles(year, month, groups, len(free_names))
     naver_raw = RU.render_naver(year, month, groups, free, intro, outro, faq_items, feat_names)
     tistory_raw = RU.render_tistory(year, month, groups, free, intro, outro, faq_items, feat_names)
+    videos = _roundup_videos(names[:6])
     naver_body, naver_imgs = place_images(naver_raw, photos, names)
     tistory_body, tistory_imgs = place_images(tistory_raw, photos, names)
+    naver_body, naver_blocks = extract_video_blocks(insert_video_markers(naver_body, videos, names))
+    tistory_body = insert_video_markers(tistory_body, videos, names)
     for im in tistory_imgs:
         im["after_text"] = (im.get("after_text") or "").replace("==", "")
     cover: list[dict] = []
@@ -3185,7 +3249,7 @@ def build_roundup_post(topic: str) -> dict:
         "naver_title": nt, "tistory_title": tt, "naver_content_body": naver_raw, "tistory_content_body": tistory_raw,
         "naver_body_final": naver_body.strip(), "tistory_body_final": tistory_body.strip(), "naver_places_list": names[:6],
         "tags": RU.tags(year, month, groups, bool(free_names)), "research": research, "official_photo_count": len(photos),
-        "video_count": 0, "naver_blocks": [], "naver_images": cover + naver_imgs, "tistory_images": cover + tistory_imgs,
+        "video_count": sum(len(v) for v in videos.values()), "naver_blocks": naver_blocks, "naver_images": cover + naver_imgs, "tistory_images": cover + tistory_imgs,
         "naver_category": NAVER_CATEGORY_EVENT, "tistory_category": TISTORY_CATEGORY_EVENT,
     }
 
