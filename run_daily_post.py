@@ -3300,7 +3300,7 @@ def _has_manual_topic() -> bool:
 
 
 def _run():
-    if not DRY_RUN and not _has_manual_topic():
+    if not DRY_RUN and not _has_manual_topic() and not os.environ.get("FORCE_PUBLISH"):
         done = int(run_state.load().get("successes", 0))
         if datetime.now().hour < ACTIVE_FROM_HOUR:
             print(f"[schedule] {datetime.now():%H:%M} — 하루 4편 체제(10·14·17·21시)라 새벽 슬롯은 쉰다", flush=True)
