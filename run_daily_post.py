@@ -3084,7 +3084,7 @@ def _fetch_tour_photo(url: str, out_dir: Path, name: str, seen: set[str]) -> str
     return str(path)
 
 
-def _roundup_detail_images(key: str, contentid: str) -> list[str]:
+def _roundup_detail_images(key: str, contentid: str) -> list[tuple[str, str]]:
     """축제 contentid의 상세 이미지 중 공공누리 제1유형만."""
     if not contentid:
         return []
@@ -3097,8 +3097,12 @@ def _roundup_detail_images(key: str, contentid: str) -> list[str]:
     except Exception as e:
         print(f"[roundup] 상세 이미지 실패({contentid}): {type(e).__name__}", flush=True)
         return []
-    return [im["originimgurl"].replace("http://", "https://") for im in it
-            if im.get("originimgurl") and im.get("cpyrhtDivCd") == "Type1"]
+    lic = [str(im.get("cpyrhtDivCd")) for im in it]
+    if it:
+        print(f"[roundup] 상세 이미지 {contentid}: {len(it)}장 저작권유형 {sorted(set(lic))}", flush=True)
+    # 공공누리 1유형(출처표시)·3유형(출처표시+변경금지)은 출처를 밝히고 원본 그대로 싣는 게시가 허용된다
+    return [(im["originimgurl"].replace("http://", "https://"), im["cpyrhtDivCd"]) for im in it
+            if im.get("originimgurl") and im.get("cpyrhtDivCd") in ("Type1", "Type3")]
 
 
 def _roundup_videos(names: list[str]) -> dict[int, list[dict]]:
@@ -3187,18 +3191,18 @@ def build_roundup_post(topic: str) -> dict:
         if len(photos) >= 10:
             break
         # 목록 API(searchFestival2)는 저작권 유형을 빠뜨리는 경우가 많다(10/30 첫 발행이 사진 0장) → 상세 이미지(detailImage2)·키워드 검색으로 Type1을 확인
-        cands = [f["image"]] if f["image"] and f["license"] == "Type1" else []
+        cands = [(f["image"], f["license"])] if f["image"] and f["license"] in ("Type1", "Type3") else []
         cands += _roundup_detail_images(key, f["contentid"])
         if not cands:
-            cands = _tour_image_urls(f["title"], limit=2)
-        for url in cands[:2]:
+            cands = [(u, "Type1") for u in _tour_image_urls(f["title"], limit=2)]
+        for url, lic in cands[:2]:
             path = _fetch_tour_photo(url, out_dir, f["title"], seen)
             if path:
-                photos.append({"place": f["title"], "place_idx": len(names), "path": path,
-                               "caption": f"사진 출처 = 한국관광공사(공공누리 제1유형) ({f['title']})"})
+                photos.append({"place": f["title"], "place_idx": len(names), "path": path, "lic": lic,
+                               "caption": f"사진 출처 = 한국관광공사 ({f['title']})"})
                 names.append(f["title"])
                 break
-    print(f"[roundup] 사진 {len(photos)}장(공공누리 제1유형)", flush=True)
+    print(f"[roundup] 사진 {len(photos)}장(공공누리 1·3유형) / 목록 저작권유형 {sorted({f['license'] for f in feat})}", flush=True)
     if len(photos) < 4:
         raise QualityGateError(f"월간 총정리: 사진 {len(photos)}장뿐(최소 4장) — 발행 보류")
     facts = {"year": year, "month": month, "total": len(feat), "regions": {r: len(g) for r, g in groups},
@@ -3237,7 +3241,7 @@ def build_roundup_post(topic: str) -> dict:
     try:
         from render_slides import render_slides
         slide = {"type": "title", "style": "feed", "heading": f"{month}월 전국 축제", "sub": f"{len(feat)}곳 날짜·장소",
-                 "badge": f"{year} 지역별 일정", "collage": [p["path"] for p in photos[:3]]}
+                 "badge": f"{year} 지역별 일정", "collage": [p["path"] for p in photos if p.get("lic") == "Type1"][:3]}  # 3유형(변경금지)은 잘라 쓰는 표지에 넣지 않는다
         paths = render_slides([slide], BASE_DIR / "outputs" / "images" / (datetime.now().strftime("%Y%m%d_%H%M%S") + "_roundup"))
         cover = [{"path": str(paths[0]), "after_text": None, "caption": slide["heading"]}]
     except Exception as e:
