@@ -3008,12 +3008,13 @@ def build_post(topic: str) -> dict:
     # 시각 자료 기준: 실사 3장 이상, 또는 (실사 2장 이상 + 영상 1개 이상). 유튜브 할당량 소진은 콘텐츠 문제가 아니라서 실사 3장 기준만 본다.
     photos_on = os.environ.get("REAL_PHOTO_MODE", "official").lower() != "off"
     if photos_on:
-        ok_visual = (len(main_photos) >= MIN_OFFICIAL_IMAGES_WARN or (len(main_photos) >= 2 and n_videos >= 1)
-                     or n_videos >= 3 or len(photos) + n_videos >= 2)  # 영상이 충분하면 현장감 확보로 본다(사용자: 영상이 실사의 대안)
+        # 2026-10-31 사용자: 사진은 반드시, 유튜브 영상도 반드시 → 실사 2장 이상 + 영상 1개 이상.
+        # 유튜브 할당량 소진(콘텐츠 문제가 아님)일 때만 실사 3장으로 대신한다.
+        ok_visual = len(photos) >= 2 and (n_videos >= 1 or (_YT_STATE.get("quota") and len(photos) >= 3))
     else:
         ok_visual = n_videos >= 2  # 실사 수집을 끈 상태: 현장감은 유튜브 영상(쇼츠/브이로그) 2개 이상으로 확보
     if not ok_visual and not force and not os.environ.get("SKIP_VISUAL_GATE"):  # SKIP_VISUAL_GATE=1은 테스트(드라이런) 전용
-        raise QualityGateError(f"시각 자료 부족: 실사 {len(main_photos)}장, 영상 {n_videos}개 (기준: 실사+영상 합쳐 2개 이상 — 실사 3장 / 실사2+영상1 / 영상 3개 / 실사1+영상1 등)")
+        raise QualityGateError(f"시각 자료 부족: 실사 {len(photos)}장, 영상 {n_videos}개 (기준: 실사 2장 이상 + 유튜브 영상 1개 이상)")
     if photos_on and len(photos) < MIN_OFFICIAL_IMAGES_WARN:
         print(f"[photo] 경고: 공식 실사 {len(photos)}장뿐(권장 {MIN_OFFICIAL_IMAGES_WARN}장 이상) — 카드뉴스+확보분으로 진행", flush=True)
 
@@ -3292,7 +3293,7 @@ def main():
         run_state.release_lock()
 
 
-DAILY_TARGET = 4             # 2026-10-19: 6→4편(10·14·17·21시). 글 수보다 키워드·품질로 승부(사용자 결정)
+DAILY_TARGET = 8             # 2026-10-31: 임시로 4→8편(네이버가 신규 글 위주로 노출 — 사용자 결정). 품질 기준은 그대로
 ACTIVE_FROM_HOUR = 9         # 02·05시 n8n 트리거가 남아 있어도 자동 주제는 9시 이전엔 쓰지 않는다
 
 

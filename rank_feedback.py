@@ -15,7 +15,7 @@ from pathlib import Path
 BASE = Path(__file__).parent
 RANK_DIR = BASE / "outputs" / "rank"
 TOPICS_FILE = BASE / "topics.md"
-MAX_PER_ENGINE_PER_DAY = 2
+MAX_PER_ENGINE_PER_DAY = 3  # 2026-10-31: 하루 8편 체제라 2→3
 HIT_RANK = 10
 MIN_SAMPLES = 4
 _DONE_RE = re.compile(r"\[완료\] \((\d{4}-\d\d-\d\d) \d\d:\d\d\)")
