@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   login:
-    runs-on: [self-hosted, oracle]  # 2026-10-31: 고정 IP(오라클 서울) — 카카오 세션이 IP가 바뀌면 끊김
+    runs-on: ubuntu-latest  # 오라클 서버 연결되면 [self-hosted, oracle]로 전환
     timeout-minutes: 20
     env:
       TZ: Asia/Seoul
