@@ -6,8 +6,8 @@ name: tistory-keepalive
 #   실패하면 빨간 실행으로 남아 몇 시간 만에 끊겼는지 알 수 있다(마지막 성공 실행 시각 ~ 첫 실패 실행 시각).
 # 호출: cron-job.org(POST .../tistory-keepalive.yml/dispatches, 30분마다) 또는 GitHub 예약(보조, 자주 누락됨).
 on:
-  schedule:
-    - cron: "17,47 * * * *"
+  # schedule: 2026-10-31 티스토리 중단 기간 동안 끔(오라클 서버 연결 후 다시 켬)
+  #   - cron: "17,47 * * * *"
   workflow_dispatch:
 
 concurrency:
