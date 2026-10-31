@@ -1,0 +1,39 @@
+name: read-url
+
+# 2026-10-31: 이 개발 환경에서 네이버 블로그가 열리지 않아, GitHub 서버에서 참고 글의 본문 텍스트만 뽑아 로그로 남긴다(조사용).
+on:
+  workflow_dispatch:
+    inputs:
+      urls:
+        description: "공백으로 구분한 URL"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 본문 추출
+        env:
+          URLS: ${{ inputs.urls }}
+        run: |
+          python3 - <<'PY'
+          import os, re, html, urllib.request
+          for u in os.environ["URLS"].split():
+              m = re.search(r"blog\.naver\.com/([^/?]+)/(\d+)", u)
+              if m:
+                  u = f"https://m.blog.naver.com/PostView.naver?blogId={m.group(1)}&logNo={m.group(2)}"
+              req = urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)"})
+              try:
+                  t = urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "replace")
+              except Exception as e:
+                  print("실패", u, e); continue
+              t = re.sub(r"(?s)<(script|style)[^>]*>.*?</\1>", " ", t)
+              t = re.sub(r"<br\s*/?>|</p>|</div>", "\n", t)
+              t = html.unescape(re.sub(r"<[^>]+>", " ", t))
+              t = "\n".join(l.strip() for l in t.splitlines() if l.strip())
+              print("=" * 20, u); print(t[:12000])
+          PY
