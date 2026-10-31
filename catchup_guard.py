@@ -39,12 +39,12 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 BASE_DIR = Path(__file__).parent
-DAILY_TARGET = 4                     # 하루 목표 발행 횟수 (2026-09-26: 5→6회, 새벽 2시 슬롯 추가)
-SCHEDULED_HOURS = [10, 14, 17, 21]  # 2026-10-19: 하루 4편  # 정규 예약 시각 (한국시간) — n8n cron과 반드시 일치시킬 것
+DAILY_TARGET = 8                     # 하루 목표 발행 횟수 (2026-09-26: 5→6회, 새벽 2시 슬롯 추가)
+SCHEDULED_HOURS = [9, 11, 12, 14, 16, 18, 20, 22]  # 2026-10-31: 임시 하루 8편  # 정규 예약 시각 (한국시간) — n8n cron과 반드시 일치시킬 것
 # (2026-09-26: 20시 → 21시로 변경 + 새벽 2시 추가 — 사용자 지시)
 MAX_PER_WAKE = 3                 # 한 번 깨어났을 때 이어서 채울 최대 편수(10/29: 예약이 하루 3번만 와서 1편씩으로는 4편을 못 채움)
 CATCHUP_GAP_HOURS = 1            # 보충 실행 간격 (2026-10-27: 3→1시간 — GitHub 예약 누락이 잦아 3시간이면 그날 마지막 슬롯을 못 채웠다)
-MAX_ATTEMPTS_PER_DAY = 10        # 주제 소진 등으로 계속 실패할 때 무한 재시도 방지 (목표의 2배)
+MAX_ATTEMPTS_PER_DAY = 16        # 주제 소진 등으로 계속 실패할 때 무한 재시도 방지 (목표의 2배)
 
 
 def expected_by_now(now: datetime) -> int:
