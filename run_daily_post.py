@@ -451,6 +451,15 @@ def _golden_topic() -> str | None:
 _SKIPPED_KW: set[str] = set()
 
 
+def _load_dup_skips() -> None:
+    """최근 7일 안에 '이미 쓴 글과 겹침'으로 버려진 키워드를 이번 실행의 제외 목록에 넣는다."""
+    try:
+        cut = datetime.now().timestamp() - 7 * 86400
+        _SKIPPED_KW.update(k for k, t in (_load_used().get("dup_skip") or {}).items() if float(t) >= cut)
+    except Exception:
+        pass
+
+
 def _roundup_candidate() -> dict | None:
     """월간 전국 축제 총정리 글(roundup.py)이 필요한 시기면 후보를 돌려준다. 달마다 한 번, 실패하면 6시간 뒤에 다시."""
     import roundup as RU
@@ -3339,6 +3348,7 @@ def _run():
         run_state.record_attempt()
 
     # 시각 자료/장소가 부족한 주제(품질 게이트 탈락)는 발행하지 않고 건너뛴 뒤 다른 주제로 최대 3번 시도한다.
+    _load_dup_skips()
     post = None
     for _try in range(3):
         topic, line_index = get_next_topic()
@@ -3355,7 +3365,12 @@ def _run():
                 print("[gate] 총정리 전용 수동 실행 — 다른 주제로 넘어가지 않고 종료", flush=True)
                 sys.exit(2)
             try:
-                _SKIPPED_KW.add(_norm_place(json.loads(GOLDEN_CTX_FILE.read_text(encoding="utf-8"))["keyword"]))
+                _kw = _norm_place(json.loads(GOLDEN_CTX_FILE.read_text(encoding="utf-8"))["keyword"])
+                _SKIPPED_KW.add(_kw)
+                if "겹침" in str(e):  # 이미 쓴 주제와 겹쳐 버린 키워드는 7일간 후보에서 뺀다(10/31: 같은 3개가 매 실행 재선정돼 시도만 소진)
+                    _st = _load_used()
+                    _st.setdefault("dup_skip", {})[_kw] = datetime.now().timestamp()
+                    USED_FILE.write_text(json.dumps(_st, ensure_ascii=False, indent=1), encoding="utf-8")
             except Exception:
                 pass
             if True:  # 드라이런에서도 표시한다(같은 주제를 3번 반복 시도하지 않게)
