@@ -2706,6 +2706,9 @@ def save_to_naver(post: dict, images: list[dict], tags: list[str]) -> str:
 
 
 def post_to_tistory(post: dict, images: list[dict], tags: list[str]) -> bool:
+    if os.environ.get("TISTORY_OFF"):
+        print("[tistory] 꺼둠(TISTORY_OFF) — 네이버만 발행", flush=True)
+        return False
     payload = {
         "title": post["tistory_title"],
         "body_html": md_to_tistory_html(post["tistory_body_final"]),
