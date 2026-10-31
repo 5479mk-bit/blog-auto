@@ -13,9 +13,9 @@ on:
         type: boolean
         default: true
       mode:
-        description: "slot=바로 1편 / guard=밀린 것만 보충 / force=시간·편수 제한 무시하고 1편(수동 재발행)"
+        description: "slot=바로 1편 / guard=밀린 것만 보충 / force=시간·편수 제한 무시하고 1편(수동 재발행) / roundup=월간 축제 총정리만(실패해도 다른 주제로 안 넘어감)"
         type: choice
-        options: [slot, guard, force]
+        options: [slot, guard, force, roundup]
         default: slot
 
 concurrency:
@@ -121,6 +121,7 @@ jobs:
         run: |
           if [ "$DRY" = "true" ]; then export DRY_RUN=1 SKIP_VISUAL_GATE=1; echo "드라이런"; fi
           if [ "$MODE" = "force" ]; then export FORCE_PUBLISH=1; fi
+          if [ "$MODE" = "roundup" ]; then export FORCE_PUBLISH=1 FORCE_ROUNDUP=1; fi
           if [ "$MODE" = "guard" ]; then
             xvfb-run -a .venv/bin/python catchup_guard.py || true
           else
