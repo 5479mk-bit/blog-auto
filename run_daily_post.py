@@ -459,7 +459,7 @@ def _roundup_candidate() -> dict | None:
         return None
     key = f"{tm[0]}-{tm[1]:02d}"
     st = _load_used()
-    if key in (st.get("roundups") or {}):
+    if key in (st.get("roundups") or {}) and not os.environ.get("TISTORY_ONLY"):
         return None
     if not os.environ.get("FORCE_ROUNDUP") and datetime.now().timestamp() - float((st.get("roundup_try") or {}).get(key, 0)) < 6 * 3600:
         return None
@@ -2705,7 +2705,7 @@ def save_to_naver(post: dict, images: list[dict], tags: list[str]) -> str:
     )
 
 
-def post_to_tistory(post: dict, images: list[dict], tags: list[str]) -> None:
+def post_to_tistory(post: dict, images: list[dict], tags: list[str]) -> bool:
     payload = {
         "title": post["tistory_title"],
         "body_html": md_to_tistory_html(post["tistory_body_final"]),
@@ -2723,12 +2723,14 @@ def post_to_tistory(post: dict, images: list[dict], tags: list[str]) -> None:
             body = json.loads(resp.read().decode("utf-8"))
         if body.get("ok"):
             print(f"[tistory] 발행 완료: {body.get('url')} (사진 {body.get('images_inserted', 0)}/{len(payload['images'])}장)", flush=True)
+            return True
         else:
             print(f"[tistory] 저장 실패(건너뜀): {body.get('error')}", file=sys.stderr)
     except urllib.error.URLError as e:
         print(f"[tistory] 데몬 연결 실패(건너뜀 — tistory_daemon.py가 안 떠 있는 듯): {e}", file=sys.stderr)
     except Exception as e:
         print(f"[tistory] 저장 중 오류(건너뜀): {e}", file=sys.stderr)
+    return False
 
 
 # ── 메인 ─────────────────────────────────────────────────
@@ -3367,6 +3369,11 @@ def _run():
         print(f"[DRY_RUN] 발행하지 않음 — logs/last_post.json 확인. 네이버 제목={post['naver_title']!r} "
               f"티스토리 제목={post['tistory_title']!r} 이미지={len(post['naver_images'])}장", flush=True)
         sys.exit(0)
+
+    if os.environ.get("TISTORY_ONLY"):  # 네이버엔 이미 올라간 글을 티스토리에만 다시 올린다(티스토리 로그인 끊김 복구용)
+        ok = post_to_tistory(post, post["tistory_images"], post["tags"])
+        print(f"[tistory-only] {'발행 완료' if ok else '실패'} — 네이버·발행 횟수는 건드리지 않음", flush=True)
+        sys.exit(0 if ok else 3)
 
     try:
         ref = save_to_naver({**post, "naver_body_final": post["naver_body_final"]}, post["naver_images"], post["tags"])
