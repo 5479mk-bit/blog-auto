@@ -2916,6 +2916,8 @@ def _dedupe_research(research: dict) -> None:
     if research.get("topic_category") == "KPOP":
         return  # 같은 시상식도 라인업→티켓팅→시야로 여러 번 쓴다(키워드 5일 쿨다운으로만 중복 방지)
     """최근 사용한 장소·행사(이름 토큰이 하나라도 겹치는 것)를 리서치 결과에서 뺀다. 메인 스팟이 전부 중복이면 이 주제는 포기(품질 게이트)."""
+    if os.environ.get("FORCE_PUBLISH"):  # 수동 강제 발행(사용자가 직접 고른 주제)은 같은 장소라도 쓴다 — 10/31 광화문 빵축제가 '광화문광장' 중복으로 막힘
+        return
     tokmap = _used_token_map()
     if not tokmap:
         return
